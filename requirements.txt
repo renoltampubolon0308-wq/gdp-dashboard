@@ -1,6 +1,10 @@
 streamlit
+pandas
+numpy
 geopandas
+shapely
+fiona
+pyogrio
 folium
 streamlit-folium
 scikit-learn
-fiona
