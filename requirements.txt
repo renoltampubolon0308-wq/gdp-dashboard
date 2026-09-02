@@ -2,3 +2,8 @@ streamlit
 geopandas
 folium
 streamlit-folium
+streamlit
+geopandas
+folium
+streamlit-folium
+scikit-learn
