@@ -4,11 +4,27 @@ import os
 import math
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import Point
+from shapely.geometry import Point, LineString, Polygon, MultiPolygon, MultiPoint
+
+def drop_z(geometry):
+    """
+    Menghapus koordinat Z (3D menjadi 2D) agar kompatibel dengan Folium & Shapely.
+    """
+    if geometry is None:
+        return None
+    if geometry.has_z:
+        if geometry.geom_type == 'Point':
+            return Point(geometry.x, geometry.y)
+        elif geometry.geom_type == 'LineString':
+            return LineString([(p[0], p[1]) for p in geometry.coords])
+        elif geometry.geom_type == 'Polygon':
+            lines = [LineString([(p[0], p[1]) for p in geometry.exterior.coords])]
+            return Polygon(lines[0])
+    return geometry
 
 def load_kml_kmz(uploaded_file):
     """
-    Fungsi membaca file KML/KMZ menjadi GeoDataFrame (EPSG:4326).
+    Membaca file KML/KMZ dari Streamlit FileUploader dan mengembalikan GeoDataFrame (EPSG:4326).
     """
     if uploaded_file is None:
         return None
@@ -20,13 +36,13 @@ def load_kml_kmz(uploaded_file):
             f.write(uploaded_file.getbuffer())
         
         target_kml = file_path
-        if filename.endswith('.kmz'):
+        if filename.lower().endswith('.kmz'):
             try:
                 with zipfile.ZipFile(file_path, 'r') as zip_ref:
                     zip_ref.extractall(tmpdir)
                     for root, dirs, files in os.walk(tmpdir):
                         for file in files:
-                            if file.endswith('.kml'):
+                            if file.lower().endswith('.kml'):
                                 target_kml = os.path.join(root, file)
                                 break
             except Exception:
@@ -35,21 +51,31 @@ def load_kml_kmz(uploaded_file):
         try:
             gpd.io.file.fiona.drvsupport.supported_drivers['KML'] = 'rw'
             gpd.io.file.fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
+            
             gdf = gpd.read_file(target_kml)
+            
+            if gdf.empty:
+                return None
+                
+            # Konversi Z (3D) ke 2D
+            gdf['geometry'] = gdf['geometry'].apply(drop_z)
+            
+            # Memastikan CRS terdaftar sebagai WGS84
             if gdf.crs is None:
                 gdf.set_crs(epsg=4326, inplace=True)
             else:
                 gdf = gdf.to_crs(epsg=4326)
+                
             return gdf
         except Exception:
             return None
 
 def hitung_kepadatan_per_ha(total_bangunan, radius_meter):
     """
-    Hitung kepadatan bangunan per hektar berdasarkan radius.
+    Hitung kepadatan bangunan per hektar berdasarkan luas lingkaran radius.
     """
     luas_m2 = math.pi * (radius_meter ** 2)
-    luas_ha = luas_m2 / 10000.0
+    luas_ha = luas_m2 / 10000.0  # 1 Ha = 10.000 m2
     
     kepadatan_ha = total_bangunan / luas_ha if luas_ha > 0 else 0
     
@@ -72,7 +98,7 @@ def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_eksis=None, gdf_komp=None, gd
     point = gpd.GeoSeries([Point(lng, lat)], crs="EPSG:4326")
     point_m = point.to_crs(epsg=3857)
     
-    # 1. Kepadatan Bangunan
+    # 1. Kepadatan Bangunan Google Open Buildings
     total_bng = 0
     if gdf_bng is not None and not gdf_bng.empty:
         gdf_bng_m = gdf_bng.to_crs(epsg=3857)
