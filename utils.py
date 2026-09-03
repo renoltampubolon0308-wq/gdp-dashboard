@@ -73,21 +73,21 @@ def hitung_kepadatan_google_buildings(lat, lon, radius_meter=1000):
         except Exception:
             continue
 
-    # Fallback estimasi jika server Overpass sibuk
+    # Fallback estimasi spasial jika Overpass timeout
     estimasi_bangunan = int((math.pi * (radius_meter ** 2)) / 1200)
     return max(estimasi_bangunan, 1245)
 
 def kalkulasi_skor_potensi(total_bangunan, n_eksisting, n_kompetitor):
-    # 1. Skor Bangunan (Max 100)
+    # Skor Kepadatan Bangunan
     skor_bangunan = min(int((total_bangunan / 1500) * 100), 100)
     
-    # 2. Skor Akses Jalan
+    # Skor Akses Jalan
     skor_akses = 82  
     
-    # 3. Skor Toko Eksisting (SPD)
+    # Skor Toko Eksisting (SPD)
     skor_eksisting = 70 if n_eksisting > 0 else 50
     
-    # 4. Skor Kompetitor (Makin sedikit kompetitor, skor makin tinggi)
+    # Skor Kompetitor
     if n_kompetitor <= 2:
         skor_kompetitor = 90
     elif n_kompetitor <= 5:
@@ -97,7 +97,7 @@ def kalkulasi_skor_potensi(total_bangunan, n_eksisting, n_kompetitor):
     else:
         skor_kompetitor = 30
         
-    # 5. Skor POI & Fasilitas
+    # Skor POI & Fasilitas
     skor_poi = 75
 
     # Skor Total Terbobot
