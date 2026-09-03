@@ -15,9 +15,6 @@ fiona.drvsupport.supported_drivers["KML"] = "rw"
 fiona.drvsupport.supported_drivers["LIBKML"] = "rw"
 
 def baca_kml(uploaded_file):
-    """
-    Membaca file KML/KMZ yang diunggah via Streamlit uploader.
-    """
     if uploaded_file is None:
         return None
         
@@ -49,13 +46,9 @@ def baca_kml(uploaded_file):
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-# Alias agar kompatibel jika dipanggil dengan nama load_kml
 load_kml = baca_kml
 
 def hitung_kepadatan_google_buildings(lat, lon, radius_meter=500):
-    """
-    Menghitung jumlah & total luas footprint bangunan Google Open Buildings.
-    """
     try:
         con = duckdb.connect()
         query = f"""
