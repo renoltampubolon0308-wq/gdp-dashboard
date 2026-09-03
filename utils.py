@@ -12,7 +12,7 @@ import geopandas as gpd
 from shapely.geometry import Point, box
 import fiona
 import warnings
-
+import duckdb
 warnings.filterwarnings("ignore")
 
 fiona.drvsupport.supported_drivers["KML"] = "rw"
@@ -278,3 +278,30 @@ def prediksi_skor(model, df_fitur, feature_cols):
     df_valid[feature_cols] = df_valid[feature_cols].fillna(0)
     pred = model.predict(df_valid[feature_cols])
     return pred
+
+# -------------------------------------------------------------------
+# FUNGSI EKSTRAKSI KEPADATAN GOOGLE OPEN BUILDINGS
+# -------------------------------------------------------------------
+def hitung_kepadatan_google_buildings(lat, lon, radius_meter=500):
+    """
+    Menghitung jumlah & total luas footprint bangunan Google Open Buildings
+    di sekitar titik koordinat toko (radius dalam meter).
+    """
+    con = duckdb.connect()
+    
+    # Query bounding box dari koordinat
+    query = f"""
+    SELECT id, geometry, area_in_meters
+    FROM read_parquet('s3://open-buildings-data/v3/polygons/*.parquet')
+    WHERE ST_Within(
+        ST_GeomFromText(geometry),
+        ST_Buffer(ST_Point({lon}, {lat}), {radius_meter / 111000.0})
+    )
+    """
+    try:
+        df_buildings = con.execute(query).df()
+        total_bangunan = len(df_buildings)
+        total_luas = df_buildings['area_in_meters'].sum() if not df_buildings.empty else 0
+        return total_bangunan, total_luas
+    except Exception as e:
+        return 0, 0
