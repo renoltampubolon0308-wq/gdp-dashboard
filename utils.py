@@ -2,6 +2,7 @@ import tempfile
 import os
 import re
 import math
+import requests
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -50,32 +51,26 @@ load_kml = baca_kml
 
 def hitung_kepadatan_google_buildings(lat, lon, radius_meter=1000):
     try:
-        # Menghitung toleransi koordinat derajat dari radius meter
-        delta_lat = radius_meter / 111000.0
-        delta_lon = radius_meter / (111000.0 * math.cos(math.radians(lat)))
-
-        min_lat = lat - delta_lat
-        max_lat = lat + delta_lat
-        min_lon = lon - delta_lon
-        max_lon = lon + delta_lon
-
-        con = duckdb.connect()
-        
-        # Query HTTP/S3 Parquet S3 Open Buildings
+        overpass_url = "http://overpass-api.de/api/interpreter"
         query = f"""
-        SELECT area_in_meters 
-        FROM read_parquet('https://storage.googleapis.com/open-buildings-data/v3/polygons/s2_level_6/*.parquet')
-        WHERE latitude >= {min_lat} AND latitude <= {max_lat}
-          AND longitude >= {min_lon} AND longitude <= {max_lon}
+        [out:json];
+        (
+          way["building"](around:{radius_meter},{lat},{lon});
+          relation["building"](around:{radius_meter},{lat},{lon});
+        );
+        out count;
         """
+        res = requests.get(overpass_url, params={'data': query}, timeout=15)
+        data = res.json()
         
-        df_buildings = con.execute(query).df()
+        elements = data.get('elements', [])
+        total_bangunan = 0
+        if elements:
+            total_bangunan = int(elements[0].get('tags', {}).get('total', 0))
         
-        total_bangunan = len(df_buildings)
-        total_luas = df_buildings['area_in_meters'].sum() if not df_buildings.empty else 0
+        # Estimasi rata-rata luas jejak bangunan (65 m² per unit)
+        total_luas = total_bangunan * 65.0
         
         return total_bangunan, total_luas
     except Exception:
-        # Fallback estimasi spasial jika DuckDB S3 di-block/timeout di cloud
-        # Menggunakan kalkulasi berbasis sampel kerapatan geografis lokal
         return 0, 0
