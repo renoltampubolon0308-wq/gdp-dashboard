@@ -2,90 +2,120 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 
-st.set_page_config(layout="wide", page_title="Dashboard Analisis Lokasi")
+# --- 1. KONFIGURASI HALAMAN ---
+st.set_page_config(
+    page_title="GDP Dashboard - Analisis Lokasi",
+    page_icon="📍",
+    layout="wide"
+)
 
-# --- INITIAL STATE ---
-# Coordinate awal (misal pusat kota/default)
-if "selected_lat" not in st_session_state:
-    st.session_state["selected_lat"] = -6.200000  # Default Latitude
-if "selected_lng" not in st_session_state:
-    st.session_state["selected_lng"] = 106.816666 # Default Longitude
+# --- 2. INISIALISASI SESSION STATE ---
+# Menyimpan koordinat default (contoh: Jakarta/Lampung) jika belum ada
+if "selected_lat" not in st.session_state:
+    st.session_state["selected_lat"] = -5.39714  # Default Latitude
+if "selected_lng" not in st.session_state:
+    st.session_state["selected_lng"] = 105.26679 # Default Longitude
 
-st.title("📍 Dashboard Analisis Potensi Lokasi Toko")
+# --- 3. SIDEBAR: PARAMETER ANALISIS ---
+with st.sidebar:
+    st.header("PARAMETER ANALISIS")
+    
+    radius = st.number_input(
+        "Radius Analisis (meter)",
+        min_value=100,
+        max_value=5000,
+        value=1000,
+        step=100
+    )
+    
+    metode = st.selectbox(
+        "Metode Penilaian",
+        ["Weighted Overlay", "Buffer Analysis", "Multi-Criteria Decision"]
+    )
+    
+    # Menampilkan koordinat aktif saat ini
+    st.markdown("---")
+    st.caption("📍 **Koordinat Evaluasi Saat Ini:**")
+    st.code(f"Lat: {st.session_state['selected_lat']:.6f}\nLng: {st.session_state['selected_lng']:.6f}", language="text")
+    
+    # Tombol Jalankan Analisis
+    btn_analisis = st.button("▶ JALANKAN ANALISIS", type="primary", use_container_width=True)
+    
+    st.markdown("---")
+    st.info("ℹ️ **Keterangan:**\nAnalisis menggunakan kepadatan bangunan Google Open Buildings serta data internal toko eksisting dan kompetitor.")
 
-# Layout Kolom (Sidebar Parameter & Peta, Hasil)
-col_left, col_right = st.columns([2, 1])
+# --- 4. TAMPILAN UTAMA (PETA & HASIL EVALUASI) ---
+col_map, col_result = st.columns([1.6, 1.2])
 
-with col_left:
-    st.subheader("Pilih Titik Lokasi Evaluasi")
-    st.caption("💡 *Klik di mana saja pada peta untuk menempatkan Marker / Kursor Evaluasi.*")
-
-    # 1. Buat Peta Folium
+with col_map:
+    st.caption("💡 *Klik pada peta di lokasi mana saja untuk memindahkan titik evaluasi.*")
+    
+    # Inisialisasi Peta Folium dengan CartoDB Dark Matter (sesuai tema dashboard Anda)
     m = folium.Map(
         location=[st.session_state["selected_lat"], st.session_state["selected_lng"]],
         zoom_start=15,
-        tiles="OpenStreetMap" # atau tile CARTO/Mapbox pilihan Anda
+        tiles="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
     )
 
-    # 2. Tambahkan Marker interaktif di posisi yang dipilih saat ini
+    # Tambahkan Marker Titik Evaluasi yang Baru Diklik
     folium.Marker(
         location=[st.session_state["selected_lat"], st.session_state["selected_lng"]],
-        popup=f"Titik Evaluasi<br>Lat: {st.session_state['selected_lat']:.5f}<br>Lng: {st.session_state['selected_lng']:.5f}",
-        tooltip="Titik Evaluasi",
-        icon=folium.Icon(color="blue", icon="info-sign")
+        popup="Titik Evaluasi",
+        tooltip="Titik Evaluasi Terpilih",
+        icon=folium.Icon(color="info", icon="info-sign", prefix="fa")
     ).add_to(m)
 
-    # 3. Tangkap Event Klik menggunakan st_folium
-    map_data = st_folium(
+    # Render peta dan tangkap event klik dengan st_folium
+    map_output = st_folium(
         m,
         width="100%",
-        height=500,
-        key="main_map"
+        height=520,
+        key="eval_map"
     )
 
-    # Update koordinat jika peta diklik oleh pengguna
-    if map_data and map_data.get("last_clicked"):
-        clicked_lat = map_data["last_clicked"]["lat"]
-        clicked_lng = map_data["last_clicked"]["lng"]
-
-        # Jika titik klik berbeda dari sebelumnya, simpan dan rerun
+    # Logika Pembaruan Titik saat Peta Diklik Pengguna
+    if map_output and map_output.get("last_clicked"):
+        clicked_lat = map_output["last_clicked"]["lat"]
+        clicked_lng = map_output["last_clicked"]["lng"]
+        
+        # Cek apakah koordinat berbeda dengan state saat ini
         if (clicked_lat != st.session_state["selected_lat"]) or (clicked_lng != st.session_state["selected_lng"]):
             st.session_state["selected_lat"] = clicked_lat
             st.session_state["selected_lng"] = clicked_lng
             st.rerun()
 
-# --- SIDEBAR / PANEL PARAMETER ---
-with st.sidebar:
-    st.header("PARAMETER ANALISIS")
-    
-    # Menampilkan koordinat yang terpilih saat ini
-    st.info(f"**Koordinat Terpilih:**\n- Lat: `{st.session_state['selected_lat']:.6f}`\n- Lng: `{st.session_state['selected_lng']:.6f}`")
-
-    radius = st.number_input("Radius Analisis (meter)", min_value=100, max_value=5000, value=1000, step=100)
-    metode = st.selectbox("Metode Penilaian", ["Weighted Overlay", "Buffer Analysis", "Multi-Criteria Decision"])
-
-    # Tombol Jalankan Analisis
-    btn_analisis = st.button("▶ JALANKAN ANALISIS", type="primary", use_container_width=True)
-
-# --- KOPIKAN HASIL ANALISIS ---
-with col_right:
-    st.subheader("Hasil Analisis")
-    
+with col_result:
     if btn_analisis:
-        st.success(f"Analisis berhasil dijalankan untuk titik (`{st.session_state['selected_lat']:.4f}`, `{st.session_state['selected_lng']:.4f}`)!")
+        # Kotak Potensi Tinggi
+        st.success("⭐ **POTENSI TINGGI**\n\nLokasi ini memiliki potensi yang baik untuk pengembangan toko baru.")
         
-        # --- CONTOH FUNGSI HITUNG ANALISIS PER TITIK ---
-        # Di sini Anda panggil fungsi backend perhitungan (Spatial overlay/buffers/scoring)
-        # berdasarkan st.session_state["selected_lat"] & st.session_state["selected_lng"]
-        
-        st.metric(label="Skor Potensi", value="83 / 100", delta="Potensi Tinggi")
+        # Skor Utama
+        st.markdown("## Skor Potensi: **83 / 100**")
         st.progress(83)
-
+        
         st.markdown("### Faktor Penilaian:")
-        st.write("🏢 **Kepadatan Bangunan:** 100 / 100")
-        st.write("🛣️ **Akses Jalan:** 82 / 100")
-        st.write("🛒 **Toko Eksisting:** 70 / 100")
-        st.write("⚔️ **Kompetitor:** 70 / 100")
-        st.write("📍 **POI & Fasilitas:** 75 / 100")
+        
+        # Contoh Tabel Faktor Penilaian
+        f1, f2 = st.columns([2, 1])
+        f1.write("🏢 Kepadatan Bangunan")
+        f2.write("**100 / 100**")
+        
+        f1, f2 = st.columns([2, 1])
+        f1.write("🛣️ Akses Jalan")
+        f2.write("**82 / 100**")
+        
+        f1, f2 = st.columns([2, 1])
+        f1.write("🛒 Toko Eksisting (SPD)")
+        f2.write("**70 / 100**")
+        
+        f1, f2 = st.columns([2, 1])
+        f1.write("⚔️ Kompetitor")
+        f2.write("**70 / 100**")
+        
+        f1, f2 = st.columns([2, 1])
+        f1.write("📍 POI & Fasilitas")
+        f2.write("**75 / 100**")
+        
     else:
-        st.info("Silakan klik lokasi pada peta di sebelah kiri, lalu klik **JALANKAN ANALISIS** pada menu di sebelah kiri.")
+        st.info("👈 **Petunjuk:** Klik titik mana saja di peta untuk menempatkan marker, lalu klik tombol **▶ JALANKAN ANALISIS** di sidebar untuk menghitung potensi lokasi.")
