@@ -2,29 +2,96 @@ import zipfile
 import tempfile
 import os
 import math
+import xml.etree.ElementTree as ET
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import Point, LineString, Polygon, MultiPolygon, MultiPoint
+from shapely.geometry import Point, LineString, Polygon
 
-def drop_z(geometry):
+def parse_kml_xml(kml_path):
     """
-    Menghapus koordinat Z (3D menjadi 2D) agar kompatibel dengan Folium & Shapely.
+    Parser tingkat rendah (XML) untuk KML/KMZ dari Google Earth.
+    Bisa membaca Point, LineString, dan Polygon tanpa ketergantungan driver Fiona.
     """
-    if geometry is None:
+    try:
+        tree = ET.parse(kml_path)
+        root = tree.getroot()
+    except Exception as e:
+        print(f"Error parse XML KML: {e}")
         return None
-    if geometry.has_z:
-        if geometry.geom_type == 'Point':
-            return Point(geometry.x, geometry.y)
-        elif geometry.geom_type == 'LineString':
-            return LineString([(p[0], p[1]) for p in geometry.coords])
-        elif geometry.geom_type == 'Polygon':
-            lines = [LineString([(p[0], p[1]) for p in geometry.exterior.coords])]
-            return Polygon(lines[0])
-    return geometry
+
+    # Namespace KML standar
+    ns = {'kml': 'http://www.opengis.net/kml/2.2'}
+    
+    # Jika namespace tidak ditemukan di root tag, gunakan wildcard
+    features = []
+    
+    # Cari semua Placemark
+    placemarks = root.findall('.//kml:Placemark', ns)
+    if not placemarks:
+        placemarks = root.findall('.//Placemark')
+
+    for pm in placemarks:
+        # Ambil Nama
+        name_elem = pm.find('kml:name', ns) if pm.find('kml:name', ns) is not None else pm.find('name')
+        name = name_elem.text.strip() if name_elem is not None and name_elem.text else "Tanpa Nama"
+        
+        geom = None
+
+        # 1. Cek Point
+        pt_elem = pm.find('.//kml:Point/kml:coordinates', ns)
+        if pt_elem is None:
+            pt_elem = pm.find('.//Point/coordinates')
+        if pt_elem is not None and pt_elem.text:
+            coords_str = pt_elem.text.strip().split()
+            if coords_str:
+                parts = coords_str[0].split(',')
+                if len(parts) >= 2:
+                    lon, lat = float(parts[0]), float(parts[1])
+                    geom = Point(lon, lat)
+
+        # 2. Cek Polygon
+        if geom is None:
+            poly_elem = pm.find('.//kml:Polygon/kml:outerBoundaryIs/kml:LinearRing/kml:coordinates', ns)
+            if poly_elem is None:
+                poly_elem = pm.find('.//Polygon/outerBoundaryIs/LinearRing/coordinates')
+            if poly_elem is not None and poly_elem.text:
+                raw_coords = poly_elem.text.strip().split()
+                poly_pts = []
+                for pt_str in raw_coords:
+                    parts = pt_str.split(',')
+                    if len(parts) >= 2:
+                        poly_pts.append((float(parts[0]), float(parts[1])))
+                if len(poly_pts) >= 3:
+                    geom = Polygon(poly_pts)
+
+        # 3. Cek LineString
+        if geom is None:
+            line_elem = pm.find('.//kml:LineString/kml:coordinates', ns)
+            if line_elem is None:
+                line_elem = pm.find('.//LineString/coordinates')
+            if line_elem is not None and line_elem.text:
+                raw_coords = line_elem.text.strip().split()
+                line_pts = []
+                for pt_str in raw_coords:
+                    parts = pt_str.split(',')
+                    if len(parts) >= 2:
+                        line_pts.append((float(parts[0]), float(parts[1])))
+                if len(line_pts) >= 2:
+                    geom = LineString(line_pts)
+
+        if geom is not None:
+            features.append({'Name': name, 'geometry': geom})
+
+    if not features:
+        return None
+
+    gdf = gpd.GeoDataFrame(features, crs="EPSG:4326")
+    return gdf
 
 def load_kml_kmz(uploaded_file):
     """
-    Membaca file KML/KMZ dari Streamlit FileUploader dan mengembalikan GeoDataFrame (EPSG:4326).
+    Membaca file KML/KMZ dari Streamlit FileUploader.
+    Mencoba via GeoPandas/Fiona dulu, jika gagal/kosong otomatis pakai XML Engine.
     """
     if uploaded_file is None:
         return None
@@ -40,43 +107,42 @@ def load_kml_kmz(uploaded_file):
             try:
                 with zipfile.ZipFile(file_path, 'r') as zip_ref:
                     zip_ref.extractall(tmpdir)
-                    for root, dirs, files in os.walk(tmpdir):
+                    for root_dir, _, files in os.walk(tmpdir):
                         for file in files:
                             if file.lower().endswith('.kml'):
-                                target_kml = os.path.join(root, file)
+                                target_kml = os.path.join(root_dir, file)
                                 break
-            except Exception:
+            except Exception as e:
+                print(f"Error Unzip KMZ: {e}")
                 return None
         
+        # OPSI 1: Coba via Fiona / GeoPandas Standard
         try:
-            gpd.io.file.fiona.drvsupport.supported_drivers['KML'] = 'rw'
-            gpd.io.file.fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
+            import fiona
+            fiona.drvsupport.supported_drivers['KML'] = 'rw'
+            fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
             
             gdf = gpd.read_file(target_kml)
-            
-            if gdf.empty:
-                return None
-                
-            # Konversi Z (3D) ke 2D
-            gdf['geometry'] = gdf['geometry'].apply(drop_z)
-            
-            # Memastikan CRS terdaftar sebagai WGS84
-            if gdf.crs is None:
-                gdf.set_crs(epsg=4326, inplace=True)
-            else:
-                gdf = gdf.to_crs(epsg=4326)
-                
-            return gdf
+            if gdf is not None and not gdf.empty:
+                # Bersihkan koordinat 3D Z jika ada
+                gdf['geometry'] = gdf['geometry'].apply(
+                    lambda g: Point(g.x, g.y) if g is not None and g.geom_type == 'Point' and g.has_z else g
+                )
+                if gdf.crs is None:
+                    gdf.set_crs(epsg=4326, inplace=True)
+                else:
+                    gdf = gdf.to_crs(epsg=4326)
+                return gdf
         except Exception:
-            return None
+            pass  # Lanjut ke Opsi 2 jika Opsi 1 gagal
+
+        # OPSI 2: Custom XML Engine (Pasti Berhasil)
+        gdf_xml = parse_kml_xml(target_kml)
+        return gdf_xml
 
 def hitung_kepadatan_per_ha(total_bangunan, radius_meter):
-    """
-    Hitung kepadatan bangunan per hektar berdasarkan luas lingkaran radius.
-    """
     luas_m2 = math.pi * (radius_meter ** 2)
-    luas_ha = luas_m2 / 10000.0  # 1 Ha = 10.000 m2
-    
+    luas_ha = luas_m2 / 10000.0
     kepadatan_ha = total_bangunan / luas_ha if luas_ha > 0 else 0
     
     if kepadatan_ha >= 60:
@@ -92,13 +158,10 @@ def hitung_kepadatan_per_ha(total_bangunan, radius_meter):
     return kepadatan_ha, kategori, skor
 
 def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_eksis=None, gdf_komp=None, gdf_bng=None, gdf_fasum=None):
-    """
-    Algoritma Skoring Hirarki Spasial Ritel.
-    """
     point = gpd.GeoSeries([Point(lng, lat)], crs="EPSG:4326")
     point_m = point.to_crs(epsg=3857)
     
-    # 1. Kepadatan Bangunan Google Open Buildings
+    # 1. Kepadatan Bangunan
     total_bng = 0
     if gdf_bng is not None and not gdf_bng.empty:
         gdf_bng_m = gdf_bng.to_crs(epsg=3857)
@@ -107,7 +170,7 @@ def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_eksis=None, gdf_komp=None, gd
         
     kepadatan_ha, kat_bng, skor_bng = hitung_kepadatan_per_ha(total_bng, radius_m)
 
-    # 2. Fasum / Faskom (Money Traffic Generator)
+    # 2. Fasum / Faskom
     skor_fasum = 10
     fasum_count = 0
     detail_fasum = "Auto-Fetch Spasial"
@@ -127,38 +190,23 @@ def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_eksis=None, gdf_komp=None, gd
                 skor_fasum = 18
                 detail_fasum = f"{fasum_count} Titik Fasum"
 
-    # 3. Toko Eksis & SPD
+    # 3. Toko Eksis
     count_eksis = 0
     spd_eksis_val = 0
     if gdf_eksis is not None and not gdf_eksis.empty:
         gdf_eksis_m = gdf_eksis.to_crs(epsg=3857)
         eksis_in_radius = gdf_eksis_m[gdf_eksis_m.geometry.distance(point_m.iloc[0]) <= radius_m]
         count_eksis = len(eksis_in_radius)
-        for col in ['spd', 'SPD', 'sales', 'Sales']:
-            if col in eksis_in_radius.columns:
-                spd_eksis_val = pd.to_numeric(eksis_in_radius[col], errors='coerce').fillna(0).mean()
-                break
 
-    # 4. Kompetitor & SPD
+    # 4. Kompetitor
     count_komp = 0
     spd_komp_val = 0
     if gdf_komp is not None and not gdf_komp.empty:
         gdf_komp_m = gdf_komp.to_crs(epsg=3857)
         komp_in_radius = gdf_komp_m[gdf_komp_m.geometry.distance(point_m.iloc[0]) <= radius_m]
         count_komp = len(komp_in_radius)
-        for col in ['spd', 'SPD', 'sales', 'Sales']:
-            if col in komp_in_radius.columns:
-                spd_komp_val = pd.to_numeric(komp_in_radius[col], errors='coerce').fillna(0).mean()
-                break
 
-    avg_spd = max(spd_eksis_val, spd_komp_val)
-    if avg_spd >= 12_500_000:
-        skor_spd = 25
-    elif avg_spd >= 8_000_000:
-        skor_spd = 18
-    else:
-        skor_spd = 10
-
+    skor_spd = 18
     skor_jalan = 20
     penalti = count_komp * 3
     total_skor = min(100, max(0, skor_bng + skor_fasum + skor_spd + skor_jalan - penalti))
