@@ -1,179 +1,148 @@
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
-import geopandas as gpd
+import utils
 
-# Import fungsi dari utils.py
-from utils import (
-    baca_kml, 
-    hitung_kepadatan_google_buildings, 
-    hitung_poin_radius, 
-    kalkulasi_skor_potensi
-)
+# Config Halaman
+st.set_page_config(page_title="Dashboard Potensi Lokasi Ritel", layout="wide")
 
-st.set_page_config(
-    page_title="Analisis Lokasi Berbasis Google Open Buildings",
-    layout="wide"
-)
-
-# Custom CSS untuk menyelaraskan tampilan UI dengan gambar
+# Custom Styling biar UI Clean & Modern
 st.markdown("""
     <style>
-    .metric-card {
-        background-color: #1e2530;
-        border-radius: 8px;
-        padding: 16px;
-        border: 1px solid #2d3748;
-        min-height: 120px;
-    }
-    .metric-title {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.5px;
-        margin-bottom: 8px;
-    }
-    .metric-value {
-        font-size: 28px;
-        font-weight: 800;
-        color: #ffffff;
-    }
-    .metric-sub {
-        font-size: 11px;
-        color: #94a3b8;
-        margin-top: 4px;
-    }
+    .main { background-color: #0e1117; }
+    .stMetric { background-color: #1f2937; padding: 12px; border-radius: 8px; border-left: 4px solid #3b82f6; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR PENGATURAN ---
-st.sidebar.header("Pengaturan Analisis")
-file_bangunan = st.sidebar.file_uploader("Upload File Bangunan (KML / GeoJSON)", type=["kml", "geojson", "json"])
-file_eksisting = st.sidebar.file_uploader("Upload File Toko Eksisting", type=["kml", "geojson"])
-file_kompetitor = st.sidebar.file_uploader("Upload File Kompetitor", type=["kml", "geojson"])
-radius_buffer = st.sidebar.slider("Pilih Radius Evaluasi (Meter)", min_value=100, max_value=1000, value=400, step=50)
+# Session State Initialization
+if 'lat_click' not in st.session_state:
+    st.session_state['lat_click'] = -5.381234
+if 'lng_click' not in st.session_state:
+    st.session_state['lng_click'] = 105.289012
 
-# Load Data
-gdf_bangunan = baca_kml(file_bangunan) if file_bangunan else None
-gdf_eksisting = baca_kml(file_eksisting) if file_eksisting else None
-gdf_kompetitor = baca_kml(file_kompetitor) if file_kompetitor else None
-
-# State Koordinat Klik
-if "selected_lat" not in st.session_state:
-    st.session_state["selected_lat"] = -5.3850
-if "selected_lng" not in st.session_state:
-    st.session_state["selected_lng"] = 105.2900
-
-cur_lat = st.session_state["selected_lat"]
-cur_lng = st.session_state["selected_lng"]
-
-# --- HITUNG DATA DINAMIS BERDASARKAN TITIK KLIK ---
-total_bangunan = hitung_kepadatan_google_buildings(gdf_bangunan, cur_lat, cur_lng, radius_buffer)
-n_eksisting = hitung_poin_radius(gdf_eksisting, cur_lat, cur_lng, radius_buffer)
-n_kompetitor = hitung_poin_radius(gdf_kompetitor, cur_lat, cur_lng, radius_buffer)
-skor_total, _ = kalkulasi_skor_potensi(total_bangunan, n_eksisting, n_kompetitor)
-
-# Header Utama
-st.caption("Analisis Lokasi Berbasis Google Open Buildings + Data Internal")
-
-# --- 1. BARIS METRIK KARTU ATAS (5 KARTU) ---
-c1, c2, c3, c4, c5 = st.columns(5)
-
-with c1:
-    txt_status = "Sangat Potensial 🎯" if skor_total >= 75 else ("Potensial" if skor_total >= 50 else "Kurang Potensial")
-    st.markdown(f"""
-    <div class="metric-card" style="border-left: 3px solid #22c55e;">
-        <div class="metric-title" style="color: #22c55e;">SKOR POTENSI</div>
-        <div class="metric-value">{skor_total} <span style="font-size:16px; font-weight:normal; color:#94a3b8;">/ 100</span></div>
-        <div class="metric-sub" style="color: #22c55e; font-weight: 600;">{txt_status}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with c2:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-title" style="color: #3b82f6;">BANGUNAN (GOOGLE)</div>
-        <div class="metric-value">{total_bangunan:,}</div>
-        <div class="metric-sub">dalam radius {radius_buffer/1000:.1f} km</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with c3:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-title" style="color: #a855f7;">TOKO EKSISTING</div>
-        <div class="metric-value">{n_eksisting}</div>
-        <div class="metric-sub">dalam radius {radius_buffer/1000:.1f} km</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with c4:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-title" style="color: #f97316;">KOMPETITOR</div>
-        <div class="metric-value">{n_kompetitor}</div>
-        <div class="metric-sub">dalam radius {radius_buffer/1000:.1f} km</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with c5:
-    st.markdown("""
-    <div class="metric-card">
-        <div class="metric-title" style="color: #e2e8f0;">SPD TOKO EKSISTING</div>
-        <div class="metric-value">Rp 12,5 jt</div>
-        <div class="metric-sub">rata-rata / hari</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# --- 2. BARIS UTAMA (PETA & HASIL ANALISIS) ---
-col_peta, col_hasil = st.columns([1.8, 1])
-
-with col_peta:
-    st.subheader("Peta Persebaran Spasial")
-    st.caption("💡 *Klik lokasi mana saja pada peta untuk memindahkan titik evaluasi.*")
+# ==========================================
+# 1. SIDEBAR (SISI KIRI) - INPUT DATA & PARAMETER
+# ==========================================
+with st.sidebar:
+    st.title("📂 Input Data KML/KMZ")
+    file_admin = st.file_uploader("Upload Batas Wilayah", type=['kml', 'kmz'])
+    file_eksis = st.file_uploader("Upload Toko Eksisting & SPD", type=['kml', 'kmz'])
+    file_komp = st.file_uploader("Upload Toko Kompetitor & SPD", type=['kml', 'kmz'])
+    file_fasum = st.file_uploader("Upload Fasum / Faskom", type=['kml', 'kmz'])
     
-    # Filter Checkbox Layer Peta
-    cb1, cb2, cb3, cb4 = st.columns(4)
-    show_bng = cb1.checkbox("Bangunan", value=True)
-    show_eks = cb2.checkbox("Toko Eksisting", value=True)
-    show_komp = cb3.checkbox("Kompetitor", value=True)
-    show_bts = cb4.checkbox("Batas Wilayah", value=True)
+    st.divider()
+    st.header("⚙️ Parameter Buffer")
+    radius_m = st.slider("Radius Analisis (meter):", min_value=100, max_value=1000, value=400, step=50)
+    
+    btn_analisis = st.button("🔍 JALANKAN ANALISIS", type="primary", use_container_width=True)
 
-    # Inisialisasi Peta Folium (Tampilan Jalan OpenStreetMap seperti di screenshot kamu)
-    m = folium.Map(location=[cur_lat, cur_lng], zoom_start=15, tiles="OpenStreetMap")
+# Load Layer
+gdf_admin = utils.load_kml_kmz(file_admin)
+gdf_eksis = utils.load_kml_kmz(file_eksis)
+gdf_komp = utils.load_kml_kmz(file_komp)
+gdf_fasum = utils.load_kml_kmz(file_fasum)
 
-    # Marker Evaluasi & Buffer
-    folium.Marker([cur_lat, cur_lng], popup="Titik Evaluasi", icon=folium.Icon(color="red", icon="info-sign")).add_to(m)
-    folium.Circle([cur_lat, cur_lng], radius=radius_buffer, color="blue", fill=True, fill_color="blue", fill_opacity=0.15).add_to(m)
+# Hitung Hasil Analisis untuk Titik Terpilih
+res = utils.kalkulasi_skor_potensi(
+    st.session_state['lat_click'], 
+    st.session_state['lng_click'], 
+    radius_m, 
+    None,  # Layer Google Buildings (dapat dihubungkan ke geoparquet/KML)
+    gdf_eksis, 
+    gdf_komp, 
+    gdf_fasum
+)
 
-    # Layer Tampilan Berdasarkan Checkbox
-    if show_bng and gdf_bangunan is not None:
-        folium.GeoJson(gdf_bangunan, style_function=lambda x: {"fillColor": "#3b82f6", "color": "#1d4ed8", "weight": 0.5}).add_to(m)
+# ==========================================
+# 2. TOP BAR: 5 KPI CARDS
+# ==========================================
+st.title("🏬 Dashboard Penilaian Potensi Lokasi Ritel")
 
-    # Render Peta
-    map_data = st_folium(m, width="100%", height=420, key="map_eval")
+kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
+with kpi1:
+    st.metric("SKOR POTENSI", f"{res['skor_total']} / 100", 
+              delta="Sangat Potensial" if res['skor_total']>=80 else ("Potensial" if res['skor_total']>=60 else "Kurang Potensial"))
+with kpi2:
+    st.metric("BANGUNAN (GOOGLE)", f"{res['total_bng']} Unit", delta=f"{res['kepadatan_ha']} bng/ha ({res['kat_bng']})", delta_color="off")
+with kpi3:
+    st.metric("FASUM / FASKOM", f"{res['fasum_count']} Titik", delta=res['detail_fasum'])
+with kpi4:
+    st.metric("TOKO / KOMPETITOR", f"{res['count_eksis']} / {res['count_komp']}", delta="Unit Terdeteksi", delta_color="off")
+with kpi5:
+    spd_eksis_txt = f"Rp {res['spd_eksis_val']/1e6:.1f}M" if res['spd_eksis_val']>=1e6 else "Rp 0"
+    spd_komp_txt = f"Rp {res['spd_komp_val']/1e6:.1f}M" if res['spd_komp_val']>=1e6 else "Rp 0"
+    st.metric("SPD COMPARISON", spd_eksis_txt, delta=f"Pesaing: {spd_komp_txt}", delta_color="inverse")
+
+st.divider()
+
+# ==========================================
+# 3. MAIN AREA: PETA & PANEL ANALISIS
+# ==========================================
+map_col, analysis_col = st.columns([6, 4])
+
+# --- SISI KIRI: PETA INTERAKTIF ---
+with map_col:
+    st.subheader("🗺️ Peta Persebaran Spasial")
+    
+    m = folium.Map(location=[st.session_state['lat_click'], st.session_state['lng_click']], zoom_start=15)
+    
+    # Tambahkan Marker & Buffer Circle
+    folium.Marker(
+        [st.session_state['lat_click'], st.session_state['lng_click']],
+        popup="Calon Lokasi Toko",
+        icon=folium.Icon(color="red", icon="shopping-cart", prefix="fa")
+    ).add_to(m)
+    
+    folium.Circle(
+        radius=radius_m,
+        location=[st.session_state['lat_click'], st.session_state['lng_click']],
+        color="#8b5cf6",
+        fill=True,
+        fill_opacity=0.2,
+        popup=f"Area Radius {radius_m}m"
+    ).add_to(m)
+    
+    # Catch Event Klik Peta
+    map_data = st_folium(m, width="100%", height=520)
+    
     if map_data and map_data.get("last_clicked"):
-        new_lat = map_data["last_clicked"]["lat"]
-        new_lng = map_data["last_clicked"]["lng"]
-        if abs(new_lat - cur_lat) > 0.00001 or abs(new_lng - cur_lng) > 0.00001:
-            st.session_state["selected_lat"] = new_lat
-            st.session_state["selected_lng"] = new_lng
-            st.rerun()
+        st.session_state['lat_click'] = map_data["last_clicked"]["lat"]
+        st.session_state['lng_click'] = map_data["last_clicked"]["lng"]
 
-with col_hasil:
-    st.subheader("Hasil Analisis Potensi")
+# --- SISI KANAN: PANEL ANALISIS LOKASI POTENSI ---
+with analysis_col:
+    st.subheader("📍 ANALISIS LOKASI POTENSI")
     
-    is_potensial = skor_total >= 70
-    box_bg = "#064e3b" if is_potensial else "#7f1d1d"
-    box_border = "#10b981" if is_potensial else "#ef4444"
-    title_text = "⭐ POTENSI TINGGI" if is_potensial else "⚠️ POTENSI RENDAH"
-    desc_text = "Lokasi ini memiliki potensi yang baik untuk pengembangan toko baru." if is_potensial else "Lokasi kurang disarankan karena kepadatan bangunan rendah atau persaingan tinggi."
-
-    st.markdown(f"""
-    <div style="background-color: {box_bg}; border: 1px solid {box_border}; padding: 20px; border-radius: 8px; color: white;">
-        <h4 style="margin: 0; color: #34d399; font-size: 16px;">{title_text}</h4>
-        <p style="margin-top: 10px; font-size: 13px; color: #e2e8f0; line-height: 1.4;">{desc_text}</p>
-    </div>
-    """, unsafe_allow_html=True)
+    # Salin Koordinat Cepat
+    st.caption("Koordinat Titik Terpilih:")
+    st.code(f"{st.session_state['lat_click']:.6f}, {st.session_state['lng_click']:.6f}", language="text")
+    
+    # Status Badge
+    skor = res['skor_total']
+    if skor >= 80:
+        st.success(f"### ⭐ SANGAT POTENSIAL (Skor: {skor} / 100)")
+        st.caption("Lokasi ini sangat direkomendasikan untuk pembukaan toko baru.")
+    elif skor >= 60:
+        st.warning(f"### 🟡 POTENSIAL (Skor: {skor} / 100)")
+        st.caption("Lokasi memadai, disarankan lanjut survei lapangan.")
+    else:
+        st.error(f"### 🔴 KURANG POTENSIAL (Skor: {skor} / 100)")
+        st.caption("Resiko tinggi, kepadatan/money traffic kurang mendukung.")
+        
+    st.markdown("**Faktor Penilaian:**")
+    
+    st.caption("🏠 Kepadatan Bangunan")
+    st.progress(res['skor_bng'] / 25, text=f"{res['skor_bng']} / 25 ({res['kat_bng']})")
+    
+    st.caption("🛒 Money Traffic (Fasum/Pasar)")
+    st.progress(res['skor_fasum'] / 30, text=f"{res['skor_fasum']} / 30 ({res['detail_fasum']})")
+    
+    st.caption("💰 Validasi Market Volume (SPD)")
+    st.progress(res['skor_spd'] / 25, text=f"{res['skor_spd']} / 25")
+    
+    st.caption("🛣️ Akses Jalan")
+    st.progress(res['skor_jalan'] / 20, text=f"{res['skor_jalan']} / 20 (Jalan Kolektor)")
+    
+    if res['penalti'] > 0:
+        st.caption(f"⚠️ Penalti Kompetitor: -{res['penalti']} Poin ({res['count_komp']} toko pesaing)")
