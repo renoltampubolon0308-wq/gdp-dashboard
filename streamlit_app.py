@@ -1,11 +1,12 @@
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
+import geopandas as gpd
+import os
 import utils
 
-st.set_page_config(page_title="Penilaian Potensi Lokasi Ritel", layout="wide")
+st.set_page_config(page_title="Dashboard Potensi Lokasi Ritel", layout="wide")
 
-# Custom Styling DARK Mode UI
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
@@ -13,14 +14,13 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Default Koordinat (Bandar Lampung Contoh)
 if 'lat_click' not in st.session_state:
     st.session_state['lat_click'] = -5.390096
 if 'lng_click' not in st.session_state:
     st.session_state['lng_click'] = 105.289012
 
 # ==========================================
-# 1. SIDEBAR (SISI KIRI)
+# 1. SIDEBAR UPLOAD & PARAMETER
 # ==========================================
 with st.sidebar:
     st.title("1. Upload Layer KML Internal")
@@ -31,31 +31,41 @@ with st.sidebar:
     st.divider()
     st.title("2. Parameter Buffer")
     radius_m = st.slider("Radius Analisis (meter):", min_value=100, max_value=1000, value=400, step=50)
-    
-    btn_analisis = st.button("🚀 Hitung Potensi Wilayah", type="primary", use_container_width=True)
+    st.button("🚀 Hitung Potensi Wilayah", type="primary", use_container_width=True)
 
-# Load Layer File KML
+# Load Layer File Upload dari Sidebar
 gdf_admin = utils.load_kml_kmz(file_admin)
 gdf_eksis = utils.load_kml_kmz(file_eksis)
 gdf_komp = utils.load_kml_kmz(file_komp)
 
-# Eksekusi Analisis Spasial
+# AUTO-LOAD DATASET SPASIAL LOKAL (Mencegah Skor Macet)
+@st.cache_data
+def load_data_lokal():
+    path_bng = "data/google_buildings.parquet"
+    path_fasum = "data/fasum_faskom.parquet"
+    gdf_bng = gpd.read_parquet(path_bng) if os.path.exists(path_bng) else None
+    gdf_fasum = gpd.read_parquet(path_fasum) if os.path.exists(path_fasum) else None
+    return gdf_bng, gdf_fasum
+
+gdf_bng_lokal, gdf_fasum_lokal = load_data_lokal()
+
+# Hitung Skor Analisis Spasial
 res = utils.kalkulasi_skor_potensi(
     st.session_state['lat_click'], 
     st.session_state['lng_click'], 
     radius_m, 
-    gdf_eksis, 
-    gdf_komp
+    gdf_eksis=gdf_eksis, 
+    gdf_komp=gdf_komp,
+    gdf_bng=gdf_bng_lokal,
+    gdf_fasum=gdf_fasum_lokal
 )
 
 # ==========================================
-# 2. TOP BAR: 5 KPI CARDS
+# 2. TOP KPI CARDS
 # ==========================================
-st.title("Penilaian Potensi Lokasi")
-st.caption("Analisis gabungan KML internal dan dataset Google Open Buildings Parquet.")
+st.title("🏬 Dashboard Penilaian Potensi Lokasi")
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
-
 with kpi1:
     st.metric("SKOR POTENSI", f"{res['skor_total']} / 100", 
               delta="Sangat Potensial" if res['skor_total']>=80 else ("Potensial" if res['skor_total']>=60 else "Kurang Potensial"))
@@ -73,26 +83,56 @@ with kpi5:
 st.divider()
 
 # ==========================================
-# 3. MAIN AREA: PETA SATELIT & PANEL ANALISIS
+# 3. PETA GOOGLE HYBRID & PANEL ANALISIS
 # ==========================================
 map_col, analysis_col = st.columns([6, 4])
 
 with map_col:
-    st.subheader("🗺️ Peta Persebaran Spasial")
+    st.subheader("🗺️ Peta Google Hybrid (Satelit + Label & Placemark)")
     
-    # Base Map Satelit (Esri World Imagery)
+    # Basemap Google Hybrid dengan Label Jalan & POI
     m = folium.Map(
         location=[st.session_state['lat_click'], st.session_state['lng_click']], 
         zoom_start=16,
-        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        attr='Esri World Imagery'
+        tiles='https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+        attr='Google Maps Hybrid'
     )
     
-    # Marker & Lingkaran Buffer Radius
+    # Plot Batas Wilayah KMZ
+    if gdf_admin is not None and not gdf_admin.empty:
+        folium.GeoJson(
+            gdf_admin,
+            name="Batas Wilayah",
+            style_function=lambda x: {'fillColor': '#f59e0b', 'color': '#f59e0b', 'weight': 2.5, 'fillOpacity': 0.2}
+        ).add_to(m)
+
+    # Plot Toko Eksisting KMZ
+    if gdf_eksis is not None and not gdf_eksis.empty:
+        for idx, row in gdf_eksis.iterrows():
+            if row.geometry and row.geometry.geom_type == 'Point':
+                name = row.get('Name', f"Toko Eksis #{idx+1}")
+                folium.Marker(
+                    location=[row.geometry.y, row.geometry.x],
+                    popup=f"Toko Eksisting: {name}",
+                    icon=folium.Icon(color="blue", icon="store", prefix="fa")
+                ).add_to(m)
+
+    # Plot Toko Kompetitor KMZ
+    if gdf_komp is not None and not gdf_komp.empty:
+        for idx, row in gdf_komp.iterrows():
+            if row.geometry and row.geometry.geom_type == 'Point':
+                name = row.get('Name', f"Kompetitor #{idx+1}")
+                folium.Marker(
+                    location=[row.geometry.y, row.geometry.x],
+                    popup=f"Kompetitor: {name}",
+                    icon=folium.Icon(color="orange", icon="shop", prefix="fa")
+                ).add_to(m)
+
+    # Pin Titik Analisis & Radius Buffer
     folium.Marker(
         [st.session_state['lat_click'], st.session_state['lng_click']],
         popup="Calon Lokasi Toko",
-        icon=folium.Icon(color="red", icon="shopping-cart", prefix="fa")
+        icon=folium.Icon(color="red", icon="crosshairs", prefix="fa")
     ).add_to(m)
     
     folium.Circle(
@@ -100,9 +140,11 @@ with map_col:
         location=[st.session_state['lat_click'], st.session_state['lng_click']],
         color="#8b5cf6",
         fill=True,
-        fill_opacity=0.3,
+        fill_opacity=0.25,
         popup=f"Area Radius {radius_m}m"
     ).add_to(m)
+    
+    folium.LayerControl().add_to(m)
     
     map_data = st_folium(m, width="100%", height=520)
     
@@ -118,7 +160,7 @@ with analysis_col:
     skor = res['skor_total']
     if skor >= 80:
         st.success(f"### ⭐ SANGAT POTENSIAL (Skor: {skor} / 100)")
-        st.caption("Lokasi ini sangat direkomendasikan untuk pembukaan toko baru.")
+        st.caption("Sangat direkomendasikan untuk pembukaan toko baru.")
     elif skor >= 60:
         st.warning(f"### 🟡 POTENSIAL (Skor: {skor} / 100)")
         st.caption("Lokasi memadai, disarankan lanjut survei lapangan.")
@@ -127,14 +169,13 @@ with analysis_col:
         st.caption("Resiko tinggi, kepadatan/money traffic kurang mendukung.")
         
     st.markdown("**Faktor Penilaian:**")
-    
     st.caption("🏠 Kepadatan Bangunan (Google Open Buildings)")
     st.progress(res['skor_bng'] / 25, text=f"{res['skor_bng']} / 25 ({res['kat_bng']})")
     
-    st.caption("🛒 Fasum/Faskom (Fasum/Faskom Auto-Fetch)")
+    st.caption("🛒 Money Traffic (Fasum/Faskom Auto-Fetch)")
     st.progress(res['skor_fasum'] / 30, text=f"{res['skor_fasum']} / 30 ({res['detail_fasum']})")
     
-    st.caption("💰 SPD Volume (SPD)")
+    st.caption("💰 Validasi Market Volume (SPD)")
     st.progress(res['skor_spd'] / 25, text=f"{res['skor_spd']} / 25")
     
     st.caption("🛣️ Akses Jalan")
