@@ -11,3 +11,4 @@ scikit-learn
 duckdb
 pyarrow
 requests
+beautifulsoup4
