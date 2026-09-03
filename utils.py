@@ -1,127 +1,156 @@
+import math
+import zipfile
+import tempfile
+import os
 import geopandas as gpd
 import pandas as pd
-import numpy as np
 from shapely.geometry import Point
-import fiona
 
-# Mengaktifkan support driver KML pada fiona
-fiona.drvsupport.supported_drivers['KML'] = 'rw'
-fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
-
-
-def baca_kml(uploaded_file):
+def load_kml_kmz(uploaded_file):
     """
-    Membaca file KML / GeoJSON / Zip yang diupload user 
-    dan mengembalikannya sebagai GeoDataFrame dengan CRS EPSG:4326.
+    Fungsi universal untuk membaca file KML atau KMZ menjadi GeoDataFrame.
     """
     if uploaded_file is None:
         return None
     
-    try:
-        # Coba baca langsung menggunakan GeoPandas
-        gdf = gpd.read_file(uploaded_file)
+    filename = uploaded_file.name
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = os.path.join(tmpdir, filename)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
         
-        # Pastikan CRS diset ke WGS84 (EPSG:4326)
-        if gdf.crs is None:
-            gdf.set_crs(epsg=4326, inplace=True)
-        else:
-            gdf = gdf.to_crs(epsg=4326)
-            
-        return gdf
-    except Exception as e:
-        print(f"Error membaca file spatial: {e}")
-        return None
-
-
-def hitung_kepadatan_google_buildings(gdf_buildings, lat, lng, radius_meter):
-    """
-    Menghitung jumlah polygon/titik bangunan dari GeoDataFrame (Google Buildings)
-    yang berada di dalam radius buffer (dalam meter) dari koordinat (lat, lng).
-    """
-    if gdf_buildings is None or len(gdf_buildings) == 0:
-        return 0
-
-    try:
-        # Buat GeoDataFrame untuk titik pusat evaluasi
-        center_gdf = gpd.GeoDataFrame(
-            geometry=[Point(lng, lat)],
-            crs="EPSG:4326"
-        )
-
-        # Reproyeksi ke CRS Proyeksi Meter (EPSG:3857) agar jarak radius presisi
-        center_metric = center_gdf.to_crs(epsg=3857)
-        gdf_metric = gdf_buildings.to_crs(epsg=3857)
-
-        # Buat lingkaran buffer berdasarkan radius_meter terpilih
-        buffer_geom = center_metric.geometry.buffer(radius_meter).iloc[0]
-
-        # Filter dan hitung bangunan yang berada/berpotongan di dalam buffer
-        gdf_filtered = gdf_buildings[gdf_metric.geometry.intersects(buffer_geom)]
-
-        return len(gdf_filtered)
-    except Exception as e:
-        print(f"Error saat menghitung spatial buffer: {e}")
-        return 0
-
-
-def hitung_poin_radius(gdf_points, lat, lng, radius_meter):
-    """
-    Menghitung jumlah titik (Eksisting / Kompetitor) dalam radius buffer.
-    """
-    if gdf_points is None or len(gdf_points) == 0:
-        return 0
-    
-    try:
-        center_gdf = gpd.GeoDataFrame(geometry=[Point(lng, lat)], crs="EPSG:4326")
-        center_metric = center_gdf.to_crs(epsg=3857)
-        gdf_metric = gdf_points.to_crs(epsg=3857)
+        # Jika file KMZ, ekstrak dulu KML di dalamnya
+        if filename.endswith('.kmz'):
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                zip_ref.extractall(tmpdir)
+                for file in os.listdir(tmpdir):
+                    if file.endswith('.kml'):
+                        file_path = os.path.join(tmpdir, file)
+                        break
         
-        buffer_geom = center_metric.geometry.buffer(radius_meter).iloc[0]
-        gdf_filtered = gdf_points[gdf_metric.geometry.intersects(buffer_geom)]
-        return len(gdf_filtered)
-    except Exception:
-        return 0
+        try:
+            # BACA KML menggunakan fiona/geopandas
+            gpd.io.file.fiona.drvsupport.supported_drivers['KML'] = 'rw'
+            gdf = gpd.read_file(file_path, driver='KML')
+            return gdf
+        except Exception as e:
+            return None
 
-
-def kalkulasi_skor_potensi(total_bangunan, n_eksisting, n_kompetitor):
+def hitung_kepadatan_per_ha(total_bangunan, radius_meter):
     """
-    Menghitung Skor Potensi (0 - 100) berdasarkan jumlah bangunan, toko eksisting, dan kompetitor.
-    
-    Bobot Penilaian:
-    1. Kepadatan Bangunan (Max 50 Poin)
-    2. Tingkat Kompetisi (Max 30 Poin)
-    3. Kanibalisasi / Toko Eksisting (Max 20 Poin)
+    Hitung kepadatan bangunan per hektar berdasarkan regulasi.
     """
-    # 1. Bobot Kepadatan Bangunan (0 - 50)
-    # Patokan: >= 1000 bangunan = Poin Maksimal (50)
-    skor_bangunan = min(50, (total_bangunan / 1000) * 50)
-
-    # 2. Bobot Kompetitor (0 - 30) -> Makin sedikit kompetitor, skor makin tinggi
-    if n_kompetitor == 0:
-        skor_kompetitor = 30
-    elif n_kompetitor <= 2:
-        skor_kompetitor = 20
-    elif n_kompetitor <= 5:
-        skor_kompetitor = 10
-    else:
-        skor_kompetitor = 0
-
-    # 3. Bobot Eksisting / Kanibalisasi (0 - 20) -> Makin sedikit toko eksisting, skor makin tinggi
-    if n_eksisting == 0:
-        skor_eksisting = 20
-    elif n_eksisting == 1:
-        skor_eksisting = 10
-    else:
-        skor_eksisting = 0
-
-    # Total Skor
-    skor_total = int(round(skor_bangunan + skor_kompetitor + skor_eksisting))
+    luas_m2 = math.pi * (radius_meter ** 2)
+    luas_ha = luas_m2 / 10000.0  # 1 Ha = 10.000 m2
     
-    # Keterangan Faktor Penilaian
-    faktor = {
-        "Skor Bangunan": round(skor_bangunan, 1),
-        "Skor Kompetitor": skor_kompetitor,
-        "Skor Eksisting": skor_eksisting
+    kepadatan_ha = total_bangunan / luas_ha if luas_ha > 0 else 0
+    
+    if kepadatan_ha >= 60:
+        kategori = "Tinggi (Padat)"
+        skor = 25
+    elif 40 <= kepadatan_ha < 60:
+        kategori = "Sedang"
+        skor = 18
+    else:
+        kategori = "Rendah"
+        skor = 10
+        
+    return kepadatan_ha, kategori, skor
+
+def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_bng, gdf_eksis, gdf_komp, gdf_fasum):
+    """
+    Algoritma Skoring Hirarki & Validasi Spasial Ritel.
+    """
+    # 1. Hitung Bangunan Google dalam Radius
+    point = gpd.GeoSeries([Point(lng, lat)], crs="EPSG:4326")
+    point_m = point.to_crs(epsg=3857)
+    
+    total_bng = 0
+    if gdf_bng is not None and not gdf_bng.empty:
+        gdf_bng_m = gdf_bng.to_crs(epsg=3857)
+        bng_in_radius = gdf_bng_m[gdf_bng_m.geometry.distance(point_m.iloc[0]) <= radius_m]
+        total_bng = len(bng_in_radius)
+        
+    kepadatan_ha, kat_bng, skor_bng = hitung_kepadatan_per_ha(total_bng, radius_m)
+
+    # 2. Hitung Fasum & Faskom (Money Traffic Generator)
+    skor_fasum = 10
+    fasum_count = 0
+    detail_fasum = "Tidak ada"
+    if gdf_fasum is not None and not gdf_fasum.empty:
+        gdf_fasum_m = gdf_fasum.to_crs(epsg=3857)
+        fasum_in_radius = gdf_fasum_m[gdf_fasum_m.geometry.distance(point_m.iloc[0]) <= radius_m]
+        fasum_count = len(fasum_in_radius)
+        if fasum_count > 0:
+            # Hirarki Bobot: Pasar > SPBU/Hub > Kantor > Sekolah
+            text_combined = " ".join(fasum_in_radius['Name'].astype(str)).lower() if 'Name' in fasum_in_radius.columns else ""
+            if 'pasar' in text_combined or 'plaza' in text_combined or 'mall' in text_combined:
+                skor_fasum = 30
+                detail_fasum = "Ada Pasar / Pusat Keramaian"
+            elif 'spbu' in text_combined or 'stasiun' in text_combined or 'terminal' in text_combined:
+                skor_fasum = 25
+                detail_fasum = "Ada SPBU / Transit Hub"
+            else:
+                skor_fasum = 18
+                detail_fasum = f"{fasum_count} Titik Fasum"
+
+    # 3. Hitung Toko Eksis & SPD
+    count_eksis = 0
+    spd_eksis_val = 0
+    if gdf_eksis is not None and not gdf_eksis.empty:
+        gdf_eksis_m = gdf_eksis.to_crs(epsg=3857)
+        eksis_in_radius = gdf_eksis_m[gdf_eksis_m.geometry.distance(point_m.iloc[0]) <= radius_m]
+        count_eksis = len(eksis_in_radius)
+        # Ambil nilai SPD jika ada
+        for col in ['spd', 'SPD', 'sales', 'Sales']:
+            if col in eksis_in_radius.columns:
+                spd_eksis_val = pd.to_numeric(eksis_in_radius[col], errors='coerce').fillna(0).mean()
+                break
+
+    # 4. Hitung Kompetitor & SPD
+    count_komp = 0
+    spd_komp_val = 0
+    if gdf_komp is not None and not gdf_komp.empty:
+        gdf_komp_m = gdf_komp.to_crs(epsg=3857)
+        komp_in_radius = gdf_komp_m[gdf_komp_m.geometry.distance(point_m.iloc[0]) <= radius_m]
+        count_komp = len(komp_in_radius)
+        for col in ['spd', 'SPD', 'sales', 'Sales']:
+            if col in komp_in_radius.columns:
+                spd_komp_val = pd.to_numeric(komp_in_radius[col], errors='coerce').fillna(0).mean()
+                break
+
+    # Skor Validasi Market Volume (SPD Eksis & Kompetitor)
+    avg_spd = max(spd_eksis_val, spd_komp_val)
+    if avg_spd >= 12_500_000:
+        skor_spd = 25
+    elif avg_spd >= 8_000_000:
+        skor_spd = 18
+    else:
+        skor_spd = 10
+
+    # Skor Akses Jalan (Default Kolektor/2-Arah untuk Baseline)
+    skor_jalan = 20
+
+    # 5. Penalties (Penalti Kejenuhan Kompetitor)
+    penalti = count_komp * 3
+
+    # TOTAL SKOR POTENSI (0 - 100)
+    total_skor = min(100, max(0, skor_bng + skor_fasum + skor_spd + skor_jalan - penalti))
+
+    return {
+        "skor_total": round(total_skor),
+        "total_bng": total_bng,
+        "kepadatan_ha": round(kepadatan_ha, 1),
+        "kat_bng": kat_bng,
+        "skor_bng": skor_bng,
+        "fasum_count": fasum_count,
+        "detail_fasum": detail_fasum,
+        "skor_fasum": skor_fasum,
+        "count_eksis": count_eksis,
+        "spd_eksis_val": spd_eksis_val,
+        "count_komp": count_komp,
+        "spd_komp_val": spd_komp_val,
+        "skor_spd": skor_spd,
+        "skor_jalan": skor_jalan,
+        "penalti": penalti
     }
-
-    return skor_total, faktor
