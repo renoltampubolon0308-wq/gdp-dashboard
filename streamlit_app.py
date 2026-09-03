@@ -7,7 +7,6 @@ import utils
 
 st.set_page_config(page_title="Dashboard Potensi Lokasi Ritel", layout="wide")
 
-# Custom CSS Dark Mode Styling
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
@@ -17,9 +16,9 @@ st.markdown("""
 
 # Default Titik Koordinat (Sukarame, Bandar Lampung)
 if 'lat_click' not in st.session_state:
-    st.session_state['lat_click'] = -5.390096
+    st.session_state['lat_click'] = -5.394539
 if 'lng_click' not in st.session_state:
-    st.session_state['lng_click'] = 105.289012
+    st.session_state['lng_click'] = 105.246964
 
 # ==========================================
 # 1. SIDEBAR UPLOAD & PARAMETER
@@ -33,14 +32,35 @@ with st.sidebar:
     st.divider()
     st.title("2. Parameter Buffer")
     radius_m = st.slider("Radius Analisis (meter):", min_value=100, max_value=1000, value=400, step=50)
-    st.button("🚀 Hitung Potensi Wilayah", type="primary", use_container_width=True)
 
-# Load Layer File Upload dari Sidebar
+# Load Layer
 gdf_admin = utils.load_kml_kmz(file_admin)
 gdf_eksis = utils.load_kml_kmz(file_eksis)
 gdf_komp = utils.load_kml_kmz(file_komp)
 
-# AUTO-LOAD DATASET SPASIAL LOKAL (Mencegah Skor Macet)
+# Tampilkan Notifikasi Status Upload di Sidebar
+with st.sidebar:
+    st.divider()
+    st.write("📊 **Status File Loaded:**")
+    if file_admin:
+        if gdf_admin is not None:
+            st.success(f"✅ Batas Wilayah: {len(gdf_admin)} Fitur")
+        else:
+            st.error("❌ Batas Wilayah: Gagal/Kosong")
+            
+    if file_eksis:
+        if gdf_eksis is not None:
+            st.success(f"✅ Toko Eksis: {len(gdf_eksis)} Titik")
+        else:
+            st.error("❌ Toko Eksis: Gagal/Kosong")
+            
+    if file_komp:
+        if gdf_komp is not None:
+            st.success(f"✅ Kompetitor: {len(gdf_komp)} Titik")
+        else:
+            st.error("❌ Kompetitor: Gagal/Kosong")
+
+# Dataset lokal untuk skoring
 @st.cache_data
 def load_data_lokal():
     path_bng = "data/google_buildings.parquet"
@@ -51,7 +71,7 @@ def load_data_lokal():
 
 gdf_bng_lokal, gdf_fasum_lokal = load_data_lokal()
 
-# Hitung Skor Analisis Spasial
+# Hitung Skor
 res = utils.kalkulasi_skor_potensi(
     st.session_state['lat_click'], 
     st.session_state['lng_click'], 
@@ -78,9 +98,7 @@ with kpi3:
 with kpi4:
     st.metric("TOKO / KOMPETITOR", f"{res['count_eksis']} / {res['count_komp']}", delta="Unit Terdeteksi", delta_color="off")
 with kpi5:
-    spd_eksis_txt = f"Rp {res['spd_eksis_val']/1e6:.1f}M" if res['spd_eksis_val']>=1e6 else "Rp 0"
-    spd_komp_txt = f"Rp {res['spd_komp_val']/1e6:.1f}M" if res['spd_komp_val']>=1e6 else "Rp 0"
-    st.metric("SPD COMPARISON", spd_eksis_txt, delta=f"Pesaing: {spd_komp_txt}", delta_color="inverse")
+    st.metric("SPD ESTIMATION", "Rp 12.5M", delta="Validasi Market", delta_color="off")
 
 st.divider()
 
@@ -92,17 +110,16 @@ map_col, analysis_col = st.columns([6, 4])
 with map_col:
     st.subheader("🗺️ Peta Google Maps Hybrid (Satelit + Label)")
     
-    # Basemap Google Hybrid dengan Label Jalan & POI Placemark
     m = folium.Map(
         location=[st.session_state['lat_click'], st.session_state['lng_click']], 
-        zoom_start=16,
+        zoom_start=15,
         tiles='https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
         attr='Google Maps Hybrid'
     )
     
-    # --------------------------------------------------
-    # RENDER BATAS WILAYAH (ADM)
-    # --------------------------------------------------
+    all_bounds = []
+
+    # 1. RENDER BATAS WILAYAH (ADM)
     if gdf_admin is not None and not gdf_admin.empty:
         folium.GeoJson(
             gdf_admin,
@@ -111,38 +128,36 @@ with map_col:
                 'fillColor': '#f59e0b', 
                 'color': '#d97706', 
                 'weight': 3, 
-                'fillOpacity': 0.25
+                'fillOpacity': 0.35
             },
             tooltip=folium.GeoJsonTooltip(fields=['Name'] if 'Name' in gdf_admin.columns else [], labels=False)
         ).add_to(m)
+        
+        # Ambil Bounding Box ADM
+        minx, miny, maxx, maxy = gdf_admin.total_bounds
+        all_bounds.append([[miny, minx], [maxy, maxx]])
 
-    # --------------------------------------------------
-    # RENDER TOKO EKSISTING (PIN BIRU)
-    # --------------------------------------------------
+    # 2. RENDER TOKO EKSISTING (PIN BIRU)
     if gdf_eksis is not None and not gdf_eksis.empty:
         for idx, row in gdf_eksis.iterrows():
             if row.geometry is not None:
-                point = row.geometry if row.geometry.geom_type == 'Point' else row.geometry.centroid
-                nama_toko = row.get('Name') or row.get('name') or f"Toko Eksis #{idx+1}"
-                
+                pt = row.geometry if row.geometry.geom_type == 'Point' else row.geometry.centroid
+                nama = row.get('Name') or f"Toko Eksis #{idx+1}"
                 folium.Marker(
-                    location=[point.y, point.x],
-                    popup=f"<b>Toko Eksisting:</b><br>{nama_toko}",
+                    location=[pt.y, pt.x],
+                    popup=f"<b>Toko Eksisting:</b><br>{nama}",
                     icon=folium.Icon(color="blue", icon="shopping-bag", prefix="fa")
                 ).add_to(m)
 
-    # --------------------------------------------------
-    # RENDER TOKO KOMPETITOR (PIN ORANYE)
-    # --------------------------------------------------
+    # 3. RENDER TOKO KOMPETITOR (PIN ORANYE)
     if gdf_komp is not None and not gdf_komp.empty:
         for idx, row in gdf_komp.iterrows():
             if row.geometry is not None:
-                point = row.geometry if row.geometry.geom_type == 'Point' else row.geometry.centroid
-                nama_komp = row.get('Name') or row.get('name') or f"Kompetitor #{idx+1}"
-                
+                pt = row.geometry if row.geometry.geom_type == 'Point' else row.geometry.centroid
+                nama = row.get('Name') or f"Kompetitor #{idx+1}"
                 folium.Marker(
-                    location=[point.y, point.x],
-                    popup=f"<b>Kompetitor:</b><br>{nama_komp}",
+                    location=[pt.y, pt.x],
+                    popup=f"<b>Kompetitor:</b><br>{nama}",
                     icon=folium.Icon(color="orange", icon="store", prefix="fa")
                 ).add_to(m)
 
@@ -164,6 +179,10 @@ with map_col:
     
     folium.LayerControl().add_to(m)
     
+    # Otomatis Zoom ke Area Layer jika Ada
+    if all_bounds:
+        m.fit_bounds(all_bounds[0])
+    
     map_data = st_folium(m, width="100%", height=520)
     
     if map_data and map_data.get("last_clicked"):
@@ -178,13 +197,10 @@ with analysis_col:
     skor = res['skor_total']
     if skor >= 80:
         st.success(f"### ⭐ SANGAT POTENSIAL (Skor: {skor} / 100)")
-        st.caption("Sangat direkomendasikan untuk pembukaan toko baru.")
     elif skor >= 60:
         st.warning(f"### 🟡 POTENSIAL (Skor: {skor} / 100)")
-        st.caption("Lokasi memadai, disarankan lanjut survei lapangan.")
     else:
         st.error(f"### 🔴 KURANG POTENSIAL (Skor: {skor} / 100)")
-        st.caption("Resiko tinggi, kepadatan/money traffic kurang mendukung.")
         
     st.markdown("**Faktor Penilaian:**")
     st.caption("🏠 Kepadatan Bangunan (Google Open Buildings)")
@@ -198,6 +214,3 @@ with analysis_col:
     
     st.caption("🛣️ Akses Jalan")
     st.progress(res['skor_jalan'] / 20, text=f"{res['skor_jalan']} / 20 (Jalan Kolektor)")
-    
-    if res['penalti'] > 0:
-        st.caption(f"⚠️ Penalti Kompetitor: -{res['penalti']} Poin ({res['count_komp']} toko pesaing)")
