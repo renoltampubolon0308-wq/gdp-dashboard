@@ -16,19 +16,14 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Global Background */
     .stApp {
         background-color: #0f172a;
         color: #f8fafc;
     }
-    
-    /* Sidebar Styling */
     [data-testid="stSidebar"] {
         background-color: #1e293b;
         border-right: 1px solid #334155;
     }
-    
-    /* Top Metric Card Styling */
     .metric-card {
         background-color: #1e293b;
         border: 1px solid #334155;
@@ -52,19 +47,12 @@ st.markdown("""
         color: #94a3b8;
         margin-top: 4px;
     }
-    
-    /* Custom Card */
     .custom-card {
         background-color: #1e293b;
         border: 1px solid #334155;
         border-radius: 12px;
         padding: 20px;
         margin-bottom: 16px;
-    }
-    
-    /* Progress bar custom color */
-    .stProgress > div > div > div > div {
-        background-color: #22c55e;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -110,23 +98,11 @@ if gdf_batas is not None and not gdf_batas.empty:
     center_lat = (bounds[1] + bounds[3]) / 2
     center_lon = (bounds[0] + bounds[2]) / 2
 
-# Initial State
-if "analisis_done" not in st.session_state:
-    st.session_state.analisis_done = True
-
-if btn_analisis:
-    st.session_state.analisis_done = True
-
-# Hitung data jika analisis aktif
 n_eksisting = len(gdf_eksisting) if gdf_eksisting is not None else 3
 n_kompetitor = len(gdf_kompetitor) if gdf_kompetitor is not None else 7
 
-if st.session_state.analisis_done:
-    total_bangunan = hitung_kepadatan_google_buildings(center_lat, center_lon, radius_buffer)
-    skor_total, faktor = kalkulasi_skor_potensi(total_bangunan, n_eksisting, n_kompetitor)
-else:
-    total_bangunan = 1245
-    skor_total, faktor = 82, {"Kepadatan Bangunan": 90, "Akses Jalan": 82, "Toko Eksisting (SPD)": 70, "Kompetitor": 50, "POI & Fasilitas": 75}
+total_bangunan = hitung_kepadatan_google_buildings(center_lat, center_lon, radius_buffer)
+skor_total, faktor = kalkulasi_skor_potensi(total_bangunan, n_eksisting, n_kompetitor)
 
 # ---------------------------------------------------------
 # HEADER SECTION
@@ -206,7 +182,6 @@ c_map, c_analisis = st.columns([2.2, 1])
 with c_map:
     st.subheader("Peta Persebaran Spasial")
     
-    # Layer filter controls
     f_col1, f_col2, f_col3, f_col4 = st.columns(4)
     with f_col1:
         show_bg = st.checkbox("Bangunan", value=True)
@@ -217,28 +192,24 @@ with c_map:
     with f_col4:
         show_bts = st.checkbox("Batas Wilayah", value=True)
 
-    # Dark Theme Folium Map
     m = folium.Map(
         location=[center_lat, center_lon], 
         zoom_start=14, 
         tiles="CartoDB dark_matter"
     )
 
-    # Batas Wilayah Layer
     if show_bts and gdf_batas is not None:
         folium.GeoJson(
             gdf_batas,
             style_function=lambda x: {'fillColor': '#3b82f6', 'color': '#60a5fa', 'weight': 2, 'fillOpacity': 0.15}
         ).add_to(m)
 
-    # Center Marker
     folium.Marker(
         location=[center_lat, center_lon],
         popup="Titik Evaluasi",
         icon=folium.Icon(color="blue", icon="info-sign")
     ).add_to(m)
 
-    # Radius Circle
     folium.Circle(
         location=[center_lat, center_lon],
         radius=radius_buffer,
@@ -248,7 +219,6 @@ with c_map:
         fill_opacity=0.1
     ).add_to(m)
 
-    # Toko Eksisting (Hijau)
     if show_eks and gdf_eksisting is not None:
         for idx, row in gdf_eksisting.iterrows():
             if row.geometry.geom_type == 'Point':
@@ -257,7 +227,6 @@ with c_map:
                     icon=folium.Icon(color="green", icon="shopping-cart", prefix="fa")
                 ).add_to(m)
 
-    # Kompetitor (Merah/Oranye)
     if show_komp and gdf_kompetitor is not None:
         for idx, row in gdf_kompetitor.iterrows():
             if row.geometry.geom_type == 'Point':
