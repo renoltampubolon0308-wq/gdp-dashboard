@@ -10,3 +10,4 @@ streamlit-folium
 scikit-learn
 duckdb
 pyarrow
+requests
