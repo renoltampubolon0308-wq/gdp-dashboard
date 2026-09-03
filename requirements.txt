@@ -8,3 +8,5 @@ pyogrio
 folium
 streamlit-folium
 scikit-learn
+duckdb
+pyarrow
