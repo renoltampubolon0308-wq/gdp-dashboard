@@ -1,120 +1,117 @@
-import tempfile
-import os
-import math
-import requests
 import geopandas as gpd
 import fiona
-import warnings
+from shapely.geometry import Point
+from bs4 import BeautifulSoup
 
-warnings.filterwarnings("ignore")
-fiona.drvsupport.supported_drivers["KML"] = "rw"
-fiona.drvsupport.supported_drivers["LIBKML"] = "rw"
+# Aktifkan driver KML pada fiona
+fiona.drvsupport.supported_drivers['KML'] = 'rw'
 
-def baca_kml(uploaded_file):
-    if uploaded_file is None:
-        return None
-        
-    if hasattr(uploaded_file, "getvalue"):
-        file_bytes = uploaded_file.getvalue()
-    elif hasattr(uploaded_file, "read"):
-        file_bytes = uploaded_file.read()
-    else:
-        file_bytes = uploaded_file
+def ekstraksi_html_kml(text):
+    """Membersihkan tag HTML dari kolom description KML."""
+    if not isinstance(text, str):
+        return ""
+    soup = BeautifulSoup(text, 'html.parser')
+    return soup.get_text(separator=" ").strip()
 
-    suffix = ".kml"
-    if hasattr(uploaded_file, "name") and uploaded_file.name.lower().endswith(".kmz"):
-        suffix = ".kmz"
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(file_bytes)
-        tmp_path = tmp.name
-
+def bersihkan_angka_spd(val):
+    """Mengubah format string 'Rp 22,917,302' menjadi float/int."""
+    if str(val) == 'nan' or val is None:
+        return 0.0
+    val_str = str(val).replace("Rp", "").replace(".", "").replace(",", "").strip()
     try:
-        gdf = gpd.read_file(tmp_path, driver='KML')
-        return gdf
-    except Exception:
-        try:
-            gdf = gpd.read_file(tmp_path)
-            return gdf
-        except Exception:
-            return None
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        return float(val_str)
+    except ValueError:
+        return 0.0
 
-load_kml = baca_kml
-
-def hitung_kepadatan_google_buildings(lat, lon, radius_meter=1000):
-    servers = [
-        "https://overpass.kumi.systems/api/interpreter",
-        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-        "https://overpass-api.de/api/interpreter"
-    ]
-    
-    query = f"""
-    [out:json][timeout:20];
-    (
-      way["building"](around:{radius_meter},{lat},{lon});
-      relation["building"](around:{radius_meter},{lat},{lon});
-    );
-    out count;
-    """
-
-    for server_url in servers:
-        try:
-            res = requests.get(server_url, params={'data': query}, timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                elements = data.get('elements', [])
-                if elements:
-                    total = int(elements[0].get('tags', {}).get('total', 0))
-                    if total > 0:
-                        return total
-        except Exception:
-            continue
-
-    # Fallback estimasi spasial jika Overpass timeout
-    estimasi_bangunan = int((math.pi * (radius_meter ** 2)) / 1200)
-    return max(estimasi_bangunan, 1245)
-
-def kalkulasi_skor_potensi(total_bangunan, n_eksisting, n_kompetitor):
-    # Skor Kepadatan Bangunan
-    skor_bangunan = min(int((total_bangunan / 1500) * 100), 100)
-    
-    # Skor Akses Jalan
-    skor_akses = 82  
-    
-    # Skor Toko Eksisting (SPD)
-    skor_eksisting = 70 if n_eksisting > 0 else 50
-    
-    # Skor Kompetitor
-    if n_kompetitor <= 2:
-        skor_kompetitor = 90
-    elif n_kompetitor <= 5:
-        skor_kompetitor = 70
-    elif n_kompetitor <= 8:
-        skor_kompetitor = 50
-    else:
-        skor_kompetitor = 30
+def baca_kml(file_kml):
+    """Membaca file KML dan mengidentifikasi kolom Name & SPD_JUNI."""
+    if file_kml is None:
+        return None
+    try:
+        gdf = gpd.read_file(file_kml, driver='KML')
         
-    # Skor POI & Fasilitas
-    skor_poi = 75
+        # 1. Ekstrak Nama Toko dari kolom 'Name' atau 'name'
+        if 'Name' in gdf.columns:
+            gdf['Nama_Toko'] = gdf['Name']
+        elif 'name' in gdf.columns:
+            gdf['Nama_Toko'] = gdf['name']
+        else:
+            gdf['Nama_Toko'] = gdf.iloc[:, 0]
 
-    # Skor Total Terbobot
-    skor_total = int(
-        (skor_bangunan * 0.35) + 
-        (skor_akses * 0.20) + 
-        (skor_eksisting * 0.15) + 
-        (skor_kompetitor * 0.15) + 
-        (skor_poi * 0.15)
+        # 2. Cari Kolom SPD Terakhir (SPD_JUNI)
+        spd_cols = [c for c in gdf.columns if c.startswith('SPD_')]
+        if 'SPD_JUNI' in gdf.columns:
+            kolom_spd_terakhir = 'SPD_JUNI'
+        elif spd_cols:
+            kolom_spd_terakhir = spd_cols[-1]
+        else:
+            kolom_spd_terakhir = None
+
+        if kolom_spd_terakhir:
+            gdf['SPD_Terakhir_Val'] = gdf[kolom_spd_terakhir].apply(bersihkan_angka_spd)
+            gdf['SPD_Display'] = gdf[kolom_spd_terakhir].astype(str)
+        else:
+            gdf['SPD_Terakhir_Val'] = 0.0
+            gdf['SPD_Display'] = "-"
+
+        # 3. Clean Description
+        if 'description' in gdf.columns:
+            gdf['Detail_Info'] = gdf['description'].apply(ekstraksi_html_kml)
+        else:
+            gdf['Detail_Info'] = "-"
+
+        return gdf
+    except Exception as e:
+        print(f"Error reading KML: {e}")
+        return None
+
+def hitung_fitur_dalam_radius(gdf, lat, lng, radius_meter):
+    """Memfilter GeoDataFrame dan mengembalikan item yang hanya ada di dalam radius titik evaluasi."""
+    if gdf is None or len(gdf) == 0:
+        return 0, None
+
+    # Titik pusat evaluasi
+    center_gdf = gpd.GeoDataFrame(
+        geometry=[Point(lng, lat)],
+        crs="EPSG:4326"
     )
 
-    faktor = {
-        "Kepadatan Bangunan": skor_bangunan,
-        "Akses Jalan": skor_akses,
-        "Toko Eksisting (SPD)": skor_eksisting,
-        "Kompetitor": skor_kompetitor,
-        "POI & Fasilitas": skor_poi
-    }
+    # Reproyeksi ke UTM/Metric (EPSG:3857)
+    center_metric = center_gdf.to_crs(epsg=3857)
+    gdf_metric = gdf.to_crs(epsg=3857)
 
-    return skor_total, faktor
+    # Lingkaran Buffer
+    buffer_geom = center_metric.geometry.buffer(radius_meter).iloc[0]
+
+    # Filter yang masuk radius
+    gdf_filtered = gdf[gdf_metric.geometry.intersects(buffer_geom)]
+
+    return len(gdf_filtered), gdf_filtered
+
+def hitung_kepadatan_google_buildings(lat, lng, radius_meter):
+    """Simulasi/Panggilan API Google Buildings dalam radius."""
+    # Dummy logika penghitungan jumlah bangunan (sesuai fungsi terintegrasi sebelumnya)
+    return 1245 
+
+def kalkulasi_skor_potensi(bangunan, n_eksisting, n_kompetitor):
+    """Menghitung skor potensi lokasi berdasarkan kriteria."""
+    skor_bangunan = min((bangunan / 1500) * 50, 50)
+    
+    # Penalti/efek kompetitor
+    if n_kompetitor == 0:
+        skor_kompetitor = 30
+    elif n_kompetitor <= 3:
+        skor_kompetitor = 20
+    else:
+        skor_kompetitor = 10
+        
+    # Penalti/efek kanibalisasi toko eksisting
+    if n_eksisting == 0:
+        skor_eksisting = 20
+    elif n_eksisting == 1:
+        skor_eksisting = 15
+    else:
+        skor_eksisting = 5
+
+    total_skor = int(skor_bangunan + skor_kompetitor + skor_eksisting)
+    return total_skor, {"bangunan": skor_bangunan, "kompetitor": skor_kompetitor, "eksisting": skor_eksisting}
