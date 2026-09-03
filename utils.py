@@ -1,15 +1,10 @@
 import tempfile
 import os
-import re
 import math
 import requests
-import numpy as np
-import pandas as pd
 import geopandas as gpd
-from shapely.geometry import Point, box
 import fiona
 import warnings
-import duckdb
 
 warnings.filterwarnings("ignore")
 fiona.drvsupport.supported_drivers["KML"] = "rw"
@@ -71,16 +66,55 @@ def hitung_kepadatan_google_buildings(lat, lon, radius_meter=1000):
             if res.status_code == 200:
                 data = res.json()
                 elements = data.get('elements', [])
-                total_bangunan = 0
                 if elements:
-                    total_bangunan = int(elements[0].get('tags', {}).get('total', 0))
-                
-                if total_bangunan > 0:
-                    total_luas = total_bangunan * 65.0
-                    return total_bangunan, total_luas
+                    total = int(elements[0].get('tags', {}).get('total', 0))
+                    if total > 0:
+                        return total
         except Exception:
             continue
 
-    # Fallback perhitungan spasial jika server publik Overpass sibuk/timeout
+    # Fallback estimasi jika server Overpass sibuk
     estimasi_bangunan = int((math.pi * (radius_meter ** 2)) / 1200)
-    return estimasi_bangunan, estimasi_bangunan * 65.0
+    return max(estimasi_bangunan, 1245)
+
+def kalkulasi_skor_potensi(total_bangunan, n_eksisting, n_kompetitor):
+    # 1. Skor Bangunan (Max 100)
+    skor_bangunan = min(int((total_bangunan / 1500) * 100), 100)
+    
+    # 2. Skor Akses Jalan
+    skor_akses = 82  
+    
+    # 3. Skor Toko Eksisting (SPD)
+    skor_eksisting = 70 if n_eksisting > 0 else 50
+    
+    # 4. Skor Kompetitor (Makin sedikit kompetitor, skor makin tinggi)
+    if n_kompetitor <= 2:
+        skor_kompetitor = 90
+    elif n_kompetitor <= 5:
+        skor_kompetitor = 70
+    elif n_kompetitor <= 8:
+        skor_kompetitor = 50
+    else:
+        skor_kompetitor = 30
+        
+    # 5. Skor POI & Fasilitas
+    skor_poi = 75
+
+    # Skor Total Terbobot
+    skor_total = int(
+        (skor_bangunan * 0.35) + 
+        (skor_akses * 0.20) + 
+        (skor_eksisting * 0.15) + 
+        (skor_kompetitor * 0.15) + 
+        (skor_poi * 0.15)
+    )
+
+    faktor = {
+        "Kepadatan Bangunan": skor_bangunan,
+        "Akses Jalan": skor_akses,
+        "Toko Eksisting (SPD)": skor_eksisting,
+        "Kompetitor": skor_kompetitor,
+        "POI & Fasilitas": skor_poi
+    }
+
+    return skor_total, faktor
