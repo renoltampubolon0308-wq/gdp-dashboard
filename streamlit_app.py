@@ -16,56 +16,18 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Global Background */
-    .stApp {
-        background-color: #0f172a;
-        color: #f8fafc;
-    }
-    
-    /* Sidebar Styling */
-    [data-testid="stSidebar"] {
-        background-color: #1e293b;
-        border-right: 1px solid #334155;
-    }
-    
-    /* Top Metric Card Styling */
-    .metric-card {
-        background-color: #1e293b;
-        border: 1px solid #334155;
-        border-radius: 10px;
-        padding: 16px;
-        color: white;
-    }
-    .metric-title {
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 6px;
-    }
-    .metric-value {
-        font-size: 1.75rem;
-        font-weight: 700;
-    }
-    .metric-sub {
-        font-size: 0.8rem;
-        color: #94a3b8;
-        margin-top: 4px;
-    }
-    
-    /* Custom Card */
-    .custom-card {
-        background-color: #1e293b;
-        border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 16px;
-    }
+    .stApp { background-color: #0f172a; color: #f8fafc; }
+    [data-testid="stSidebar"] { background-color: #1e293b; border-right: 1px solid #334155; }
+    .metric-card { background-color: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 16px; color: white; }
+    .metric-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    .metric-value { font-size: 1.75rem; font-weight: 700; }
+    .metric-sub { font-size: 0.8rem; color: #94a3b8; margin-top: 4px; }
+    .custom-card { background-color: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. INISIALISASI SESSION STATE UNTUK KOORDINAT INTERAKTIF
+# 2. INISIALISASI SESSION STATE
 # ---------------------------------------------------------
 if "selected_lat" not in st.session_state:
     st.session_state["selected_lat"] = -5.3850
@@ -94,7 +56,6 @@ radius_buffer = st.sidebar.number_input("Radius Analisis", min_value=200, max_va
 st.sidebar.caption("Metode Penilaian")
 metode = st.sidebar.selectbox("Metode Penilaian", ["Google Buildings Focused", "Weighted Overlay", "Buffer Density"], label_visibility="collapsed")
 
-# Menampilkan koordinat aktif hasil klik peta
 st.sidebar.markdown("---")
 st.sidebar.caption("📍 **Koordinat Evaluasi Terpilih:**")
 st.sidebar.code(f"Lat: {st.session_state['selected_lat']:.6f}\nLng: {st.session_state['selected_lng']:.6f}", language="text")
@@ -106,16 +67,15 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("ℹ️ **Keterangan**")
 st.sidebar.caption("Analisis menggunakan kepadatan bangunan Google Open Buildings serta data internal toko eksisting dan kompetitor.")
 
-# READ KML
+# BACA FILE KML
 gdf_batas = baca_kml(file_batas) if file_batas else None
 gdf_eksisting = baca_kml(file_toko_eksisting) if file_toko_eksisting else None
 gdf_kompetitor = baca_kml(file_kompetitor) if file_kompetitor else None
 
-# Hitung data toko & kompetitor
-n_eksisting = len(gdf_eksisting) if gdf_eksisting is not None else 3
-n_kompetitor = len(gdf_kompetitor) if gdf_kompetitor is not None else 7
+n_eksisting = len(gdf_eksisting) if gdf_eksisting is not None else 0
+n_kompetitor = len(gdf_kompetitor) if gdf_kompetitor is not None else 0
 
-# Hitung Kepadatan & Skor berdasarkan koordinat terpilih dari klik peta
+# HITUNG DENSITAS & SKOR
 total_bangunan = hitung_kepadatan_google_buildings(st.session_state["selected_lat"], st.session_state["selected_lng"], radius_buffer)
 skor_total, faktor = kalkulasi_skor_potensi(total_bangunan, n_eksisting, n_kompetitor)
 
@@ -138,7 +98,7 @@ with head_col2:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 5. TOP METRICS BAR (5 KARTU UTAMA)
+# 5. TOP METRICS BAR
 # ---------------------------------------------------------
 m1, m2, m3, m4, m5 = st.columns(5)
 
@@ -156,7 +116,7 @@ with m2:
     <div class="metric-card">
         <div class="metric-title" style="color: #3b82f6;">BANGUNAN (GOOGLE)</div>
         <div class="metric-value">{total_bangunan:,}</div>
-        <div class="metric-sub">dalam radius {radius_buffer/1000:.0f} km</div>
+        <div class="metric-sub">dalam radius {radius_buffer/1000:.1f} km</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -165,7 +125,7 @@ with m3:
     <div class="metric-card">
         <div class="metric-title" style="color: #a855f7;">TOKO EKSISTING</div>
         <div class="metric-value">{n_eksisting}</div>
-        <div class="metric-sub">dalam radius {radius_buffer/1000:.0f} km</div>
+        <div class="metric-sub">file ter-upload</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -174,7 +134,7 @@ with m4:
     <div class="metric-card">
         <div class="metric-title" style="color: #f97316;">KOMPETITOR</div>
         <div class="metric-value">{n_kompetitor}</div>
-        <div class="metric-sub">dalam radius {radius_buffer/1000:.0f} km</div>
+        <div class="metric-sub">file ter-upload</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -196,9 +156,8 @@ c_map, c_analisis = st.columns([2.2, 1])
 
 with c_map:
     st.subheader("Peta Persebaran Spasial")
-    st.caption("💡 *Klik lokasi mana saja di peta untuk memindahkan kursor/titik evaluasi.*")
+    st.caption("💡 *Klik lokasi mana saja pada peta untuk memindahkan titik evaluasi.*")
     
-    # Layer filter
     f_col1, f_col2, f_col3, f_col4 = st.columns(4)
     with f_col1:
         show_bg = st.checkbox("Bangunan", value=True)
@@ -209,65 +168,72 @@ with c_map:
     with f_col4:
         show_bts = st.checkbox("Batas Wilayah", value=True)
 
-    # Inisialisasi Peta Folium (menggunakan OpenStreetMap bebas API key)
+    # Inisialisasi Peta
     m = folium.Map(
         location=[st.session_state["selected_lat"], st.session_state["selected_lng"]], 
-        zoom_start=15, 
+        zoom_start=14, 
         tiles="OpenStreetMap"
     )
 
-    # Batas Wilayah Layer
+    # 1. Layer Batas Wilayah (GeoJson)
     if show_bts and gdf_batas is not None:
         folium.GeoJson(
             gdf_batas,
-            style_function=lambda x: {'fillColor': '#3b82f6', 'color': '#60a5fa', 'weight': 2, 'fillOpacity': 0.15}
+            style_function=lambda x: {'fillColor': '#3b82f6', 'color': '#2563eb', 'weight': 2, 'fillOpacity': 0.1}
         ).add_to(m)
 
-    # Marker Titik Evaluasi yang bisa berpindah
+    # 2. Layer Toko Eksisting (GeoJson langsung agar presisi & kompatibel dengan semua tipe geometri KML)
+    if show_eks and gdf_eksisting is not None:
+        folium.GeoJson(
+            gdf_eksisting,
+            name="Toko Eksisting",
+            marker=folium.Marker(icon=folium.Icon(color="green", icon="shopping-cart", prefix="fa")),
+            tooltip=folium.GeoJsonTooltip(fields=[gdf_eksisting.columns[0]], aliases=["Nama Toko:"]) if len(gdf_eksisting.columns) > 0 else None
+        ).add_to(m)
+
+    # 3. Layer Kompetitor (GeoJson)
+    if show_komp and gdf_kompetitor is not None:
+        folium.GeoJson(
+            gdf_kompetitor,
+            name="Kompetitor",
+            marker=folium.Marker(icon=folium.Icon(color="orange", icon="store", prefix="fa")),
+            tooltip=folium.GeoJsonTooltip(fields=[gdf_kompetitor.columns[0]], aliases=["Kompetitor:"]) if len(gdf_kompetitor.columns) > 0 else None
+        ).add_to(m)
+
+    # 4. Marker Titik Evaluasi Terpilih
     folium.Marker(
         location=[st.session_state["selected_lat"], st.session_state["selected_lng"]],
         popup="Titik Evaluasi Terpilih",
-        tooltip="Klik untuk info",
+        tooltip="Titik Evaluasi",
         icon=folium.Icon(color="red", icon="info-sign")
     ).add_to(m)
 
-    # Radius Circle
+    # 5. Radius Buffer
     folium.Circle(
         location=[st.session_state["selected_lat"], st.session_state["selected_lng"]],
         radius=radius_buffer,
-        color="#818cf8",
+        color="#6366f1",
         weight=2,
         fill=True,
         fill_opacity=0.15
     ).add_to(m)
 
-    # Toko Eksisting (Hijau)
-    if show_eks and gdf_eksisting is not None:
-        for idx, row in gdf_eksisting.iterrows():
-            if row.geometry.geom_type == 'Point':
-                folium.Marker(
-                    location=[row.geometry.y, row.geometry.x],
-                    icon=folium.Icon(color="green", icon="shopping-cart", prefix="fa")
-                ).add_to(m)
+    # Render peta dengan menangkap respons klik secara mendalam
+    map_data = st_folium(
+        m, 
+        width="100%", 
+        height=480, 
+        key="main_interactive_map",
+        returned_objects=["last_clicked"]
+    )
 
-    # Kompetitor (Oranye)
-    if show_komp and gdf_kompetitor is not None:
-        for idx, row in gdf_kompetitor.iterrows():
-            if row.geometry.geom_type == 'Point':
-                folium.Marker(
-                    location=[row.geometry.y, row.geometry.x],
-                    icon=folium.Icon(color="orange", icon="store", prefix="fa")
-                ).add_to(m)
-
-    # Render peta dan tangkap event klik
-    map_data = st_folium(m, width="100%", height=480, key="interactive_map")
-
-    # Update koordinat saat peta diklik
+    # LOGIKA KLIK PETA
     if map_data and map_data.get("last_clicked"):
         clicked_lat = map_data["last_clicked"]["lat"]
         clicked_lng = map_data["last_clicked"]["lng"]
         
-        if (clicked_lat != st.session_state["selected_lat"]) or (clicked_lng != st.session_state["selected_lng"]):
+        # Toleransi perubahan koordinat untuk pemicu rerun
+        if abs(clicked_lat - st.session_state["selected_lat"]) > 0.00001 or abs(clicked_lng - st.session_state["selected_lng"]) > 0.00001:
             st.session_state["selected_lat"] = clicked_lat
             st.session_state["selected_lng"] = clicked_lng
             st.rerun()
@@ -309,7 +275,7 @@ with c_insight:
         <div class="custom-card">
             <div style="color: #22c55e; font-size: 0.8rem; font-weight: bold;">Kepadatan Bangunan</div>
             <div style="color: #22c55e; font-size: 1.1rem; font-weight: bold; margin: 4px 0;">TINGGI</div>
-            <div style="color: #94a3b8; font-size: 0.75rem;">{total_bangunan:,} bangunan dalam radius {radius_buffer/1000:.0f} km.</div>
+            <div style="color: #94a3b8; font-size: 0.75rem;">{total_bangunan:,} bangunan dalam radius {radius_buffer/1000:.1f} km.</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -327,7 +293,7 @@ with c_insight:
         <div class="custom-card">
             <div style="color: #eab308; font-size: 0.8rem; font-weight: bold;">Kompetitor</div>
             <div style="color: #eab308; font-size: 1.1rem; font-weight: bold; margin: 4px 0;">SEDANG</div>
-            <div style="color: #94a3b8; font-size: 0.75rem;">{n_kompetitor} kompetitor dalam radius {radius_buffer/1000:.0f} km.</div>
+            <div style="color: #94a3b8; font-size: 0.75rem;">{n_kompetitor} toko terdeteksi.</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -336,7 +302,7 @@ with c_insight:
         <div class="custom-card">
             <div style="color: #22c55e; font-size: 0.8rem; font-weight: bold;">Toko Eksisting</div>
             <div style="color: #22c55e; font-size: 1.1rem; font-weight: bold; margin: 4px 0;">ADA</div>
-            <div style="color: #94a3b8; font-size: 0.75rem;">Terdapat {n_eksisting} toko eksisting di sekitar.</div>
+            <div style="color: #94a3b8; font-size: 0.75rem;">Terdapat {n_eksisting} toko eksisting di area ini.</div>
         </div>
         """, unsafe_allow_html=True)
 
