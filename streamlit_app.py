@@ -7,6 +7,7 @@ import utils
 
 st.set_page_config(page_title="Dashboard Potensi Lokasi Ritel", layout="wide")
 
+# Custom CSS Dark Mode Styling
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
@@ -14,6 +15,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# Default Titik Koordinat (Sukarame, Bandar Lampung)
 if 'lat_click' not in st.session_state:
     st.session_state['lat_click'] = -5.390096
 if 'lng_click' not in st.session_state:
@@ -88,9 +90,9 @@ st.divider()
 map_col, analysis_col = st.columns([6, 4])
 
 with map_col:
-    st.subheader("🗺️ Peta Google Hybrid (Satelit + Label & Placemark)")
+    st.subheader("🗺️ Peta Google Maps Hybrid (Satelit + Label)")
     
-    # Basemap Google Hybrid dengan Label Jalan & POI
+    # Basemap Google Hybrid dengan Label Jalan & POI Placemark
     m = folium.Map(
         location=[st.session_state['lat_click'], st.session_state['lng_click']], 
         zoom_start=16,
@@ -98,37 +100,53 @@ with map_col:
         attr='Google Maps Hybrid'
     )
     
-    # Plot Batas Wilayah KMZ
+    # --------------------------------------------------
+    # RENDER BATAS WILAYAH (ADM)
+    # --------------------------------------------------
     if gdf_admin is not None and not gdf_admin.empty:
         folium.GeoJson(
             gdf_admin,
-            name="Batas Wilayah",
-            style_function=lambda x: {'fillColor': '#f59e0b', 'color': '#f59e0b', 'weight': 2.5, 'fillOpacity': 0.2}
+            name="Batas Wilayah (ADM)",
+            style_function=lambda x: {
+                'fillColor': '#f59e0b', 
+                'color': '#d97706', 
+                'weight': 3, 
+                'fillOpacity': 0.25
+            },
+            tooltip=folium.GeoJsonTooltip(fields=['Name'] if 'Name' in gdf_admin.columns else [], labels=False)
         ).add_to(m)
 
-    # Plot Toko Eksisting KMZ
+    # --------------------------------------------------
+    # RENDER TOKO EKSISTING (PIN BIRU)
+    # --------------------------------------------------
     if gdf_eksis is not None and not gdf_eksis.empty:
         for idx, row in gdf_eksis.iterrows():
-            if row.geometry and row.geometry.geom_type == 'Point':
-                name = row.get('Name', f"Toko Eksis #{idx+1}")
+            if row.geometry is not None:
+                point = row.geometry if row.geometry.geom_type == 'Point' else row.geometry.centroid
+                nama_toko = row.get('Name') or row.get('name') or f"Toko Eksis #{idx+1}"
+                
                 folium.Marker(
-                    location=[row.geometry.y, row.geometry.x],
-                    popup=f"Toko Eksisting: {name}",
-                    icon=folium.Icon(color="blue", icon="store", prefix="fa")
+                    location=[point.y, point.x],
+                    popup=f"<b>Toko Eksisting:</b><br>{nama_toko}",
+                    icon=folium.Icon(color="blue", icon="shopping-bag", prefix="fa")
                 ).add_to(m)
 
-    # Plot Toko Kompetitor KMZ
+    # --------------------------------------------------
+    # RENDER TOKO KOMPETITOR (PIN ORANYE)
+    # --------------------------------------------------
     if gdf_komp is not None and not gdf_komp.empty:
         for idx, row in gdf_komp.iterrows():
-            if row.geometry and row.geometry.geom_type == 'Point':
-                name = row.get('Name', f"Kompetitor #{idx+1}")
+            if row.geometry is not None:
+                point = row.geometry if row.geometry.geom_type == 'Point' else row.geometry.centroid
+                nama_komp = row.get('Name') or row.get('name') or f"Kompetitor #{idx+1}"
+                
                 folium.Marker(
-                    location=[row.geometry.y, row.geometry.x],
-                    popup=f"Kompetitor: {name}",
-                    icon=folium.Icon(color="orange", icon="shop", prefix="fa")
+                    location=[point.y, point.x],
+                    popup=f"<b>Kompetitor:</b><br>{nama_komp}",
+                    icon=folium.Icon(color="orange", icon="store", prefix="fa")
                 ).add_to(m)
 
-    # Pin Titik Analisis & Radius Buffer
+    # Titik Analisis Utama & Buffer Radius
     folium.Marker(
         [st.session_state['lat_click'], st.session_state['lng_click']],
         popup="Calon Lokasi Toko",
