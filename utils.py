@@ -8,7 +8,7 @@ from shapely.geometry import Point
 
 def load_kml_kmz(uploaded_file):
     """
-    Fungsi universal untuk membaca file KML atau KMZ menjadi GeoDataFrame.
+    Fungsi universal untuk membaca file KML/KMZ menjadi GeoDataFrame.
     """
     if uploaded_file is None:
         return None
@@ -19,26 +19,28 @@ def load_kml_kmz(uploaded_file):
         with open(file_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
         
-        # Jika file KMZ, ekstrak dulu KML di dalamnya
+        # Jika file KMZ, ekstrak file KML di dalamnya
         if filename.endswith('.kmz'):
-            with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                zip_ref.extractall(tmpdir)
-                for file in os.listdir(tmpdir):
-                    if file.endswith('.kml'):
-                        file_path = os.path.join(tmpdir, file)
-                        break
+            try:
+                with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                    zip_ref.extractall(tmpdir)
+                    for file in os.listdir(tmpdir):
+                        if file.endswith('.kml'):
+                            file_path = os.path.join(tmpdir, file)
+                            break
+            except Exception:
+                return None
         
         try:
-            # BACA KML menggunakan fiona/geopandas
             gpd.io.file.fiona.drvsupport.supported_drivers['KML'] = 'rw'
             gdf = gpd.read_file(file_path, driver='KML')
             return gdf
-        except Exception as e:
+        except Exception:
             return None
 
 def hitung_kepadatan_per_ha(total_bangunan, radius_meter):
     """
-    Hitung kepadatan bangunan per hektar berdasarkan regulasi.
+    Hitung kepadatan bangunan per hektar berdasarkan luas lingkaran radius.
     """
     luas_m2 = math.pi * (radius_meter ** 2)
     luas_ha = luas_m2 / 10000.0  # 1 Ha = 10.000 m2
@@ -57,9 +59,10 @@ def hitung_kepadatan_per_ha(total_bangunan, radius_meter):
         
     return kepadatan_ha, kategori, skor
 
-def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_bng, gdf_eksis, gdf_komp, gdf_fasum):
+def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_eksis=None, gdf_komp=None, gdf_bng=None, gdf_fasum=None):
     """
-    Algoritma Skoring Hirarki & Validasi Spasial Ritel.
+    Algoritma Skoring Hirarki Spasial Ritel.
+    Parameter dibuat fleksibel/opsional untuk mencegah TypeError.
     """
     # 1. Hitung Bangunan Google dalam Radius
     point = gpd.GeoSeries([Point(lng, lat)], crs="EPSG:4326")
@@ -73,21 +76,20 @@ def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_bng, gdf_eksis, gdf_komp, gdf
         
     kepadatan_ha, kat_bng, skor_bng = hitung_kepadatan_per_ha(total_bng, radius_m)
 
-    # 2. Hitung Fasum & Faskom (Money Traffic Generator)
+    # 2. Hitung Fasum / Faskom (Money Traffic Generator - Auto Fetch Backend)
     skor_fasum = 10
     fasum_count = 0
-    detail_fasum = "Tidak ada"
+    detail_fasum = "Auto-Fetch Spasial"
     if gdf_fasum is not None and not gdf_fasum.empty:
         gdf_fasum_m = gdf_fasum.to_crs(epsg=3857)
         fasum_in_radius = gdf_fasum_m[gdf_fasum_m.geometry.distance(point_m.iloc[0]) <= radius_m]
         fasum_count = len(fasum_in_radius)
         if fasum_count > 0:
-            # Hirarki Bobot: Pasar > SPBU/Hub > Kantor > Sekolah
             text_combined = " ".join(fasum_in_radius['Name'].astype(str)).lower() if 'Name' in fasum_in_radius.columns else ""
-            if 'pasar' in text_combined or 'plaza' in text_combined or 'mall' in text_combined:
+            if any(k in text_combined for k in ['pasar', 'plaza', 'mall']):
                 skor_fasum = 30
                 detail_fasum = "Ada Pasar / Pusat Keramaian"
-            elif 'spbu' in text_combined or 'stasiun' in text_combined or 'terminal' in text_combined:
+            elif any(k in text_combined for k in ['spbu', 'stasiun', 'terminal']):
                 skor_fasum = 25
                 detail_fasum = "Ada SPBU / Transit Hub"
             else:
@@ -101,7 +103,6 @@ def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_bng, gdf_eksis, gdf_komp, gdf
         gdf_eksis_m = gdf_eksis.to_crs(epsg=3857)
         eksis_in_radius = gdf_eksis_m[gdf_eksis_m.geometry.distance(point_m.iloc[0]) <= radius_m]
         count_eksis = len(eksis_in_radius)
-        # Ambil nilai SPD jika ada
         for col in ['spd', 'SPD', 'sales', 'Sales']:
             if col in eksis_in_radius.columns:
                 spd_eksis_val = pd.to_numeric(eksis_in_radius[col], errors='coerce').fillna(0).mean()
@@ -119,7 +120,7 @@ def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_bng, gdf_eksis, gdf_komp, gdf
                 spd_komp_val = pd.to_numeric(komp_in_radius[col], errors='coerce').fillna(0).mean()
                 break
 
-    # Skor Validasi Market Volume (SPD Eksis & Kompetitor)
+    # Validasi Market Volume (Puncak SPD)
     avg_spd = max(spd_eksis_val, spd_komp_val)
     if avg_spd >= 12_500_000:
         skor_spd = 25
@@ -128,13 +129,11 @@ def kalkulasi_skor_potensi(lat, lng, radius_m, gdf_bng, gdf_eksis, gdf_komp, gdf
     else:
         skor_spd = 10
 
-    # Skor Akses Jalan (Default Kolektor/2-Arah untuk Baseline)
+    # Skor Akses Jalan Baseline & Penalti
     skor_jalan = 20
-
-    # 5. Penalties (Penalti Kejenuhan Kompetitor)
     penalti = count_komp * 3
-
-    # TOTAL SKOR POTENSI (0 - 100)
+    
+    # Total Skor
     total_skor = min(100, max(0, skor_bng + skor_fasum + skor_spd + skor_jalan - penalti))
 
     return {
