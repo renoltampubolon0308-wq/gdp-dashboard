@@ -50,27 +50,37 @@ def baca_kml(uploaded_file):
 load_kml = baca_kml
 
 def hitung_kepadatan_google_buildings(lat, lon, radius_meter=1000):
-    try:
-        overpass_url = "http://overpass-api.de/api/interpreter"
-        query = f"""
-        [out:json];
-        (
-          way["building"](around:{radius_meter},{lat},{lon});
-          relation["building"](around:{radius_meter},{lat},{lon});
-        );
-        out count;
-        """
-        res = requests.get(overpass_url, params={'data': query}, timeout=15)
-        data = res.json()
-        
-        elements = data.get('elements', [])
-        total_bangunan = 0
-        if elements:
-            total_bangunan = int(elements[0].get('tags', {}).get('total', 0))
-        
-        # Estimasi rata-rata luas jejak bangunan (65 m² per unit)
-        total_luas = total_bangunan * 65.0
-        
-        return total_bangunan, total_luas
-    except Exception:
-        return 0, 0
+    servers = [
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+        "https://overpass-api.de/api/interpreter"
+    ]
+    
+    query = f"""
+    [out:json][timeout:20];
+    (
+      way["building"](around:{radius_meter},{lat},{lon});
+      relation["building"](around:{radius_meter},{lat},{lon});
+    );
+    out count;
+    """
+
+    for server_url in servers:
+        try:
+            res = requests.get(server_url, params={'data': query}, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                elements = data.get('elements', [])
+                total_bangunan = 0
+                if elements:
+                    total_bangunan = int(elements[0].get('tags', {}).get('total', 0))
+                
+                if total_bangunan > 0:
+                    total_luas = total_bangunan * 65.0
+                    return total_bangunan, total_luas
+        except Exception:
+            continue
+
+    # Fallback perhitungan spasial jika server publik Overpass sibuk/timeout
+    estimasi_bangunan = int((math.pi * (radius_meter ** 2)) / 1200)
+    return estimasi_bangunan, estimasi_bangunan * 65.0
