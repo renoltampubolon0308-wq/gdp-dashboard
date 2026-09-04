@@ -14,11 +14,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Default Titik Koordinat (Sukarame, Bandar Lampung)
+# Default Titik Koordinat
 if 'lat_click' not in st.session_state:
-    st.session_state['lat_click'] = -5.394539
+    st.session_state['lat_click'] = -5.389839
 if 'lng_click' not in st.session_state:
-    st.session_state['lng_click'] = 105.246964
+    st.session_state['lng_click'] = 105.252371
 
 # ==========================================
 # 1. SIDEBAR UPLOAD & PARAMETER
@@ -33,20 +33,20 @@ with st.sidebar:
     st.title("2. Parameter Buffer")
     radius_m = st.slider("Radius Analisis (meter):", min_value=100, max_value=1000, value=400, step=50)
 
-# Load Layer
+# Load Layer KML
 gdf_admin = utils.load_kml_kmz(file_admin)
 gdf_eksis = utils.load_kml_kmz(file_eksis)
 gdf_komp = utils.load_kml_kmz(file_komp)
 
-# Tampilkan Notifikasi Status Upload di Sidebar
+# Status Indikator File Upload
 with st.sidebar:
     st.divider()
     st.write("📊 **Status File Loaded:**")
     if file_admin:
         if gdf_admin is not None:
-            st.success(f"✅ Batas Wilayah: {len(gdf_admin)} Fitur")
+            st.success(f"✅ ADM Wilayah: {len(gdf_admin)} Fitur")
         else:
-            st.error("❌ Batas Wilayah: Gagal/Kosong")
+            st.error("❌ ADM Wilayah: Gagal/Kosong")
             
     if file_eksis:
         if gdf_eksis is not None:
@@ -60,18 +60,20 @@ with st.sidebar:
         else:
             st.error("❌ Kompetitor: Gagal/Kosong")
 
-# Dataset lokal untuk skoring
+# Dataset lokal
 @st.cache_data
 def load_data_lokal():
-    path_bng = "data/google_buildings.parquet"
-    path_fasum = "data/fasum_faskom.parquet"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    path_bng = os.path.join(base_dir, "data", "google_buildings.parquet")
+    path_fasum = os.path.join(base_dir, "data", "fasum_faskom.parquet")
+    
     gdf_bng = gpd.read_parquet(path_bng) if os.path.exists(path_bng) else None
     gdf_fasum = gpd.read_parquet(path_fasum) if os.path.exists(path_fasum) else None
     return gdf_bng, gdf_fasum
 
 gdf_bng_lokal, gdf_fasum_lokal = load_data_lokal()
 
-# Hitung Skor
+# Hitung Skor Dinamis
 res = utils.kalkulasi_skor_potensi(
     st.session_state['lat_click'], 
     st.session_state['lng_click'], 
@@ -133,7 +135,6 @@ with map_col:
             tooltip=folium.GeoJsonTooltip(fields=['Name'] if 'Name' in gdf_admin.columns else [], labels=False)
         ).add_to(m)
         
-        # Ambil Bounding Box ADM
         minx, miny, maxx, maxy = gdf_admin.total_bounds
         all_bounds.append([[miny, minx], [maxy, maxx]])
 
@@ -161,7 +162,7 @@ with map_col:
                     icon=folium.Icon(color="orange", icon="store", prefix="fa")
                 ).add_to(m)
 
-    # Titik Analisis Utama & Buffer Radius
+    # Titik Analisis Utama & Circle Radius
     folium.Marker(
         [st.session_state['lat_click'], st.session_state['lng_click']],
         popup="Calon Lokasi Toko",
@@ -179,15 +180,20 @@ with map_col:
     
     folium.LayerControl().add_to(m)
     
-    # Otomatis Zoom ke Area Layer jika Ada
+    # Auto Fit Bounds ke Layer KML
     if all_bounds:
         m.fit_bounds(all_bounds[0])
     
-    map_data = st_folium(m, width="100%", height=520)
+    map_data = st_folium(m, width="100%", height=520, key="folium_map")
     
+    # Update Titik Klik & Trigger Re-run
     if map_data and map_data.get("last_clicked"):
-        st.session_state['lat_click'] = map_data["last_clicked"]["lat"]
-        st.session_state['lng_click'] = map_data["last_clicked"]["lng"]
+        new_lat = map_data["last_clicked"]["lat"]
+        new_lng = map_data["last_clicked"]["lng"]
+        if new_lat != st.session_state['lat_click'] or new_lng != st.session_state['lng_click']:
+            st.session_state['lat_click'] = new_lat
+            st.session_state['lng_click'] = new_lng
+            st.rerun()
 
 with analysis_col:
     st.subheader("📍 ANALISIS LOKASI POTENSI")
@@ -214,3 +220,6 @@ with analysis_col:
     
     st.caption("🛣️ Akses Jalan")
     st.progress(res['skor_jalan'] / 20, text=f"{res['skor_jalan']} / 20 (Jalan Kolektor)")
+    
+    if res['penalti'] > 0:
+        st.caption(f"⚠️ Penalti Kompetitor: -{res['penalti']} Poin ({res['count_komp']} toko pesaing)")
