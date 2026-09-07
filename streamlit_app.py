@@ -1,7 +1,6 @@
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
-import geopandas as gpd
 import os
 import utils
 
@@ -14,7 +13,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Default Titik Koordinat
+# Default titik koordinat
 if 'lat_click' not in st.session_state:
     st.session_state['lat_click'] = -5.389839
 if 'lng_click' not in st.session_state:
@@ -28,60 +27,74 @@ with st.sidebar:
     file_admin = st.file_uploader("Upload Batas Wilayah (KML/KMZ)", type=['kml', 'kmz'])
     file_eksis = st.file_uploader("Upload Toko Eksisting (KML/KMZ)", type=['kml', 'kmz'])
     file_komp = st.file_uploader("Upload Toko Kompetitor (KML/KMZ)", type=['kml', 'kmz'])
-    
+
     st.divider()
     st.title("2. Parameter Buffer")
     radius_m = st.slider("Radius Analisis (meter):", min_value=100, max_value=1000, value=400, step=50)
 
-# Load Layer KML
+# Load layer KML (upload baru diproses ulang tiap kali file berubah - itu wajar & murah untuk KML)
 gdf_admin = utils.load_kml_kmz(file_admin)
 gdf_eksis = utils.load_kml_kmz(file_eksis)
 gdf_komp = utils.load_kml_kmz(file_komp)
 
-# Status Indikator File Upload
+# Status indikator file upload
 with st.sidebar:
     st.divider()
     st.write("📊 **Status File Loaded:**")
     if file_admin:
-        if gdf_admin is not None:
-            st.success(f"✅ ADM Wilayah: {len(gdf_admin)} Fitur")
-        else:
-            st.error("❌ ADM Wilayah: Gagal/Kosong")
-            
+        st.success(f"✅ ADM Wilayah: {len(gdf_admin)} Fitur") if gdf_admin is not None else st.error("❌ ADM Wilayah: Gagal/Kosong")
     if file_eksis:
-        if gdf_eksis is not None:
-            st.success(f"✅ Toko Eksis: {len(gdf_eksis)} Titik")
-        else:
-            st.error("❌ Toko Eksis: Gagal/Kosong")
-            
+        st.success(f"✅ Toko Eksis: {len(gdf_eksis)} Titik") if gdf_eksis is not None else st.error("❌ Toko Eksis: Gagal/Kosong")
     if file_komp:
-        if gdf_komp is not None:
-            st.success(f"✅ Kompetitor: {len(gdf_komp)} Titik")
-        else:
-            st.error("❌ Kompetitor: Gagal/Kosong")
+        st.success(f"✅ Kompetitor: {len(gdf_komp)} Titik") if gdf_komp is not None else st.error("❌ Kompetitor: Gagal/Kosong")
 
-# Dataset lokal
-@st.cache_data
-def load_data_lokal():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    path_bng = os.path.join(base_dir, "data", "google_buildings.parquet")
-    path_fasum = os.path.join(base_dir, "data", "fasum_faskom.parquet")
-    
-    gdf_bng = gpd.read_parquet(path_bng) if os.path.exists(path_bng) else None
-    gdf_fasum = gpd.read_parquet(path_fasum) if os.path.exists(path_fasum) else None
-    return gdf_bng, gdf_fasum
+# ==========================================
+# DATASET LOKAL (precomputed - bangunan & fasum)
+# ==========================================
+base_dir = os.path.dirname(os.path.abspath(__file__))
+gdf_bng_lokal, gdf_fasum_lokal, gdf_jalan_lokal = utils.load_data_lokal(base_dir)
 
-gdf_bng_lokal, gdf_fasum_lokal = load_data_lokal()
+# --- Jalan: kalau belum ada file parquet-nya, tarik otomatis dari OSM sekali saja ---
+if gdf_jalan_lokal is None:
+    # tentukan area cakupan dari batas admin (kalau ada) atau toko eksisting, dengan padding
+    gdf_acuan = gdf_admin if gdf_admin is not None else gdf_eksis
+    if gdf_acuan is not None and not gdf_acuan.empty:
+        minx, miny, maxx, maxy = gdf_acuan.total_bounds
+        pad = 0.02  # ~2km padding
+        bbox_wsen = (minx - pad, miny - pad, maxx + pad, maxy + pad)
+        gdf_jalan_lokal = utils.ambil_jalan_otomatis(base_dir, bbox_wsen)
+        if gdf_jalan_lokal is None:
+            st.sidebar.warning("⚠️ Gagal ambil data jalan dari OSM (server sedang sibuk). Skor jalan pakai estimasi kasar untuk sementara.")
+    else:
+        st.sidebar.info("ℹ️ Upload batas wilayah atau toko eksisting dulu supaya data jalan bisa ditarik otomatis.")
 
-# Hitung Skor Dinamis
+
+# ==========================================
+# SIAPKAN SEMUA LAYER SEKALI SAJA (reproject + spatial index, DI-CACHE)
+# Ini kunci performa: tidak di-reproject ulang tiap kali pengguna klik peta.
+# ==========================================
+gdf_bng_m = utils.siapkan_layer_meter(gdf_bng_lokal, cache_key="bng_lokal")
+gdf_fasum_m = utils.siapkan_layer_meter(gdf_fasum_lokal, cache_key="fasum_lokal")
+gdf_jalan_m = utils.siapkan_layer_meter(gdf_jalan_lokal, cache_key="jalan_lokal")
+
+# layer upload: cache_key ikut nama+ukuran file supaya cache tidak "nyangkut" ke file lama
+key_eksis = f"eksis_{file_eksis.name}_{file_eksis.size}" if file_eksis else "eksis_none"
+key_komp = f"komp_{file_komp.name}_{file_komp.size}" if file_komp else "komp_none"
+gdf_eksis_m = utils.siapkan_layer_meter(gdf_eksis, cache_key=key_eksis)
+gdf_komp_m = utils.siapkan_layer_meter(gdf_komp, cache_key=key_komp)
+
+# ==========================================
+# HITUNG SKOR (cepat, karena layer sudah siap & di-index)
+# ==========================================
 res = utils.kalkulasi_skor_potensi(
-    st.session_state['lat_click'], 
-    st.session_state['lng_click'], 
-    radius_m, 
-    gdf_eksis=gdf_eksis, 
-    gdf_komp=gdf_komp,
-    gdf_bng=gdf_bng_lokal,
-    gdf_fasum=gdf_fasum_lokal
+    st.session_state['lat_click'],
+    st.session_state['lng_click'],
+    radius_m,
+    gdf_eksis_m=gdf_eksis_m,
+    gdf_komp_m=gdf_komp_m,
+    gdf_bng_m=gdf_bng_m,
+    gdf_fasum_m=gdf_fasum_m,
+    gdf_jalan_m=gdf_jalan_m,
 )
 
 # ==========================================
@@ -91,8 +104,8 @@ st.title("🏬 Dashboard Penilaian Potensi Lokasi")
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 with kpi1:
-    st.metric("SKOR POTENSI", f"{res['skor_total']} / 100", 
-              delta="Sangat Potensial" if res['skor_total']>=80 else ("Potensial" if res['skor_total']>=60 else "Kurang Potensial"))
+    st.metric("SKOR POTENSI", f"{res['skor_total']} / 100",
+              delta="Sangat Potensial" if res['skor_total'] >= 80 else ("Potensial" if res['skor_total'] >= 60 else "Kurang Potensial"))
 with kpi2:
     st.metric("BANGUNAN (GOOGLE)", f"{res['total_bng']} Unit", delta=f"{res['kepadatan_ha']} bng/ha ({res['kat_bng']})", delta_color="off")
 with kpi3:
@@ -111,34 +124,26 @@ map_col, analysis_col = st.columns([6, 4])
 
 with map_col:
     st.subheader("🗺️ Peta Google Maps Hybrid (Satelit + Label)")
-    
+
     m = folium.Map(
-        location=[st.session_state['lat_click'], st.session_state['lng_click']], 
+        location=[st.session_state['lat_click'], st.session_state['lng_click']],
         zoom_start=15,
         tiles='https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
         attr='Google Maps Hybrid'
     )
-    
+
     all_bounds = []
 
-    # 1. RENDER BATAS WILAYAH (ADM)
     if gdf_admin is not None and not gdf_admin.empty:
         folium.GeoJson(
             gdf_admin,
             name="Batas Wilayah (ADM)",
-            style_function=lambda x: {
-                'fillColor': '#f59e0b', 
-                'color': '#d97706', 
-                'weight': 3, 
-                'fillOpacity': 0.35
-            },
+            style_function=lambda x: {'fillColor': '#f59e0b', 'color': '#d97706', 'weight': 3, 'fillOpacity': 0.35},
             tooltip=folium.GeoJsonTooltip(fields=['Name'] if 'Name' in gdf_admin.columns else [], labels=False)
         ).add_to(m)
-        
         minx, miny, maxx, maxy = gdf_admin.total_bounds
         all_bounds.append([[miny, minx], [maxy, maxx]])
 
-    # 2. RENDER TOKO EKSISTING (PIN BIRU)
     if gdf_eksis is not None and not gdf_eksis.empty:
         for idx, row in gdf_eksis.iterrows():
             if row.geometry is not None:
@@ -150,7 +155,6 @@ with map_col:
                     icon=folium.Icon(color="blue", icon="shopping-bag", prefix="fa")
                 ).add_to(m)
 
-    # 3. RENDER TOKO KOMPETITOR (PIN ORANYE)
     if gdf_komp is not None and not gdf_komp.empty:
         for idx, row in gdf_komp.iterrows():
             if row.geometry is not None:
@@ -162,13 +166,12 @@ with map_col:
                     icon=folium.Icon(color="orange", icon="store", prefix="fa")
                 ).add_to(m)
 
-    # Titik Analisis Utama & Circle Radius
     folium.Marker(
         [st.session_state['lat_click'], st.session_state['lng_click']],
         popup="Calon Lokasi Toko",
         icon=folium.Icon(color="red", icon="crosshairs", prefix="fa")
     ).add_to(m)
-    
+
     folium.Circle(
         radius=radius_m,
         location=[st.session_state['lat_click'], st.session_state['lng_click']],
@@ -177,16 +180,14 @@ with map_col:
         fill_opacity=0.25,
         popup=f"Area Radius {radius_m}m"
     ).add_to(m)
-    
+
     folium.LayerControl().add_to(m)
-    
-    # Auto Fit Bounds ke Layer KML
+
     if all_bounds:
         m.fit_bounds(all_bounds[0])
-    
+
     map_data = st_folium(m, width="100%", height=520, key="folium_map")
-    
-    # Update Titik Klik & Trigger Re-run
+
     if map_data and map_data.get("last_clicked"):
         new_lat = map_data["last_clicked"]["lat"]
         new_lng = map_data["last_clicked"]["lng"]
@@ -199,7 +200,7 @@ with analysis_col:
     st.subheader("📍 ANALISIS LOKASI POTENSI")
     st.caption("Koordinat Titik Terpilih:")
     st.code(f"{st.session_state['lat_click']:.6f}, {st.session_state['lng_click']:.6f}", language="text")
-    
+
     skor = res['skor_total']
     if skor >= 80:
         st.success(f"### ⭐ SANGAT POTENSIAL (Skor: {skor} / 100)")
@@ -207,19 +208,20 @@ with analysis_col:
         st.warning(f"### 🟡 POTENSIAL (Skor: {skor} / 100)")
     else:
         st.error(f"### 🔴 KURANG POTENSIAL (Skor: {skor} / 100)")
-        
+
     st.markdown("**Faktor Penilaian:**")
     st.caption("🏠 Kepadatan Bangunan (Google Open Buildings)")
     st.progress(res['skor_bng'] / 25, text=f"{res['skor_bng']} / 25 ({res['kat_bng']})")
-    
+
     st.caption("🛒 Money Traffic (Fasum/Faskom Auto-Fetch)")
     st.progress(res['skor_fasum'] / 30, text=f"{res['skor_fasum']} / 30 ({res['detail_fasum']})")
-    
+
     st.caption("💰 Validasi Market Volume (SPD)")
     st.progress(res['skor_spd'] / 25, text=f"{res['skor_spd']} / 25")
-    
-    st.caption("🛣️ Akses Jalan")
-    st.progress(res['skor_jalan'] / 20, text=f"{res['skor_jalan']} / 20 (Jalan Kolektor)")
-    
+
+    label_jalan = "Data Jalan Lokal" if gdf_jalan_m is not None else "Estimasi (belum ada layer jalan)"
+    st.caption(f"🛣️ Akses Jalan — {label_jalan}")
+    st.progress(res['skor_jalan'] / 20, text=f"{res['skor_jalan']} / 20")
+
     if res['penalti'] > 0:
-        st.caption(f"⚠️ Penalti Kompetitor: -{res['penalti']} Poin ({res['count_komp']} toko pesaing)")
+        st.caption(f"⚠️ Penalti Kompetitor (berbasis jarak): -{res['penalti']} Poin ({res['count_komp']} toko pesaing)")
